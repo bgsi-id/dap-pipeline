@@ -1,0 +1,26 @@
+schema_version: "1.0"
+id: nextflow-data-smoke
+name: Sample VCF input check
+version: 0.1.0
+description: Resolve one authorised sample and verify its VCF inputs.
+engine: nextflow
+workflow_type: NFL
+workflow_type_version: DSL2
+entrypoint: main.nf
+execution:
+  preferred_location: alor
+  compute_profiles:
+    - standard
+inputs:
+  - role: vcf
+    parameter: vcf_uri
+    checksum_parameter: vcf_sha256
+    required: true
+  - role: vcf_index
+    parameter: vcf_index_uri
+    checksum_parameter: vcf_index_sha256
+    required: true
+outputs:
+  - name: summary
+    path: summary.txt
+    media_type: text/plain

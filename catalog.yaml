@@ -1,0 +1,6 @@
+schema_version: "1.0"
+pipelines:
+  - id: nextflow-data-smoke
+    path: pipelines/sample-vcf-smoke
+    descriptor: pipelines/sample-vcf-smoke/pipeline.yaml
+    active: true
