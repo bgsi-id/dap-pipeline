@@ -4,9 +4,17 @@ name: Sample VCF input check
 version: 0.1.0
 description: Resolve one authorised sample and verify its VCF inputs.
 engine: nextflow
+engine_version: 26.04.6
 workflow_type: NFL
 workflow_type_version: DSL2
 entrypoint: main.nf
+tags:
+  - nextflow
+  - drs
+  - sample
+  - eks
+estimate: "<1 CPU·h"
+token_estimate: 1
 execution:
   preferred_location: alor
   compute_profiles:
