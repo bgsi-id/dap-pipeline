@@ -14,3 +14,9 @@ pipelines/
 
 Runtime submissions always pin this repository to a full Git commit SHA and a
 safe pipeline directory.
+
+Auth synchronises `catalog.yaml` from the configured branch into its own
+persistent registry. Repository `active` controls whether an entry is eligible
+for import; a separate platform enable/disable flag controls whether users can
+launch it. Synchronisation updates metadata without overriding a platform
+disable.
