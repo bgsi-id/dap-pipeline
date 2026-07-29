@@ -33,5 +33,11 @@ It participates in Nextflow task hashes and is written to provenance.
 Optional SHA-256 parameters are `vcf_sha256` and `vcf_index_sha256`.
 `af_cutoff` defaults to `0.01`.
 
+Before normalization, the workflow retains only records on contigs present in
+the configured FASTA index. This removes ALT contigs that are incompatible with
+the default no-alt GRCh38 reference. The resulting total, retained, and removed
+variant counts are published as `<sample_id>.contig-filter.tsv` and included in
+provenance.
+
 Keep real input locations in `params.private.json`. This filename is ignored
 repository-wide and must never be committed.

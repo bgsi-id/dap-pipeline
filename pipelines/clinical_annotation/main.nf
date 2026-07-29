@@ -61,6 +61,61 @@ process PRECHECK_REFERENCE {
 }
 
 
+process FILTER_REFERENCE_CONTIGS {
+    tag "${sample_id}"
+
+    container params.bcftools_image
+    cpus 4
+    memory '8 GB'
+    time '4h'
+
+    input:
+    path input_vcf
+    path input_vcf_index
+    path reference_ready
+    val sample_id
+    val vcf_sha256
+    val vcf_index_sha256
+    val reference_release
+
+    output:
+    path 'primary.vcf.gz', emit: vcf
+    path 'primary.vcf.gz.tbi', emit: index
+    path 'contig-filter.tsv', emit: stats
+
+    script:
+    """
+    set -euo pipefail
+
+    if [[ -n '${vcf_sha256}' ]]; then
+      echo '${vcf_sha256}  ${input_vcf}' | sha256sum -c -
+    fi
+    if [[ -n '${vcf_index_sha256}' ]]; then
+      echo '${vcf_index_sha256}  ${input_vcf_index}' | sha256sum -c -
+    fi
+
+    awk 'BEGIN { OFS="\\t" } { print \$1, 1, \$2 }' \
+      '${params.reference_dir}/${params.fasta_name}.fai' \
+      > reference-contigs.tsv
+
+    bcftools view \
+      --regions-file reference-contigs.tsv \
+      --threads ${task.cpus} \
+      -Oz \
+      -o primary.vcf.gz \
+      '${input_vcf}'
+    bcftools index -t --threads ${task.cpus} primary.vcf.gz
+
+    variants_total=\$(bcftools index -n '${input_vcf}')
+    variants_retained=\$(bcftools index -n primary.vcf.gz)
+    variants_removed=\$((variants_total - variants_retained))
+    printf 'variants_total\\t%s\\nvariants_retained\\t%s\\nvariants_removed_non_reference_contigs\\t%s\\n' \
+      "\${variants_total}" "\${variants_retained}" "\${variants_removed}" \
+      > contig-filter.tsv
+    """
+}
+
+
 process NORMALIZE {
     tag "${sample_id}"
 
@@ -74,8 +129,6 @@ process NORMALIZE {
     path input_vcf_index
     path reference_ready
     val sample_id
-    val vcf_sha256
-    val vcf_index_sha256
     val reference_release
 
     output:
@@ -85,13 +138,6 @@ process NORMALIZE {
     script:
     """
     set -euo pipefail
-
-    if [[ -n '${vcf_sha256}' ]]; then
-      echo '${vcf_sha256}  ${input_vcf}' | sha256sum -c -
-    fi
-    if [[ -n '${vcf_index_sha256}' ]]; then
-      echo '${vcf_index_sha256}  ${input_vcf_index}' | sha256sum -c -
-    fi
 
     bcftools norm \
       -m -any \
@@ -316,6 +362,7 @@ process BUILD_PROVENANCE {
 
     input:
     path counts
+    path contig_filter_stats
     val sample_id
     val reference_release
     val af_cutoff
@@ -329,6 +376,9 @@ process BUILD_PROVENANCE {
 
     variants_in=\$(sed -n '1s/^[^[:space:]]*[[:space:]]*//p' '${counts}')
     variants_tiered=\$(sed -n '2s/^[^[:space:]]*[[:space:]]*//p' '${counts}')
+    variants_total=\$(sed -n '1s/^[^[:space:]]*[[:space:]]*//p' '${contig_filter_stats}')
+    variants_retained=\$(sed -n '2s/^[^[:space:]]*[[:space:]]*//p' '${contig_filter_stats}')
+    variants_removed=\$(sed -n '3s/^[^[:space:]]*[[:space:]]*//p' '${contig_filter_stats}')
     spliceai='NOT APPLIED'
     if [[ -s '${params.reference_dir}/${params.spliceai_name}' && -s '${params.reference_dir}/${params.spliceai_name}.tbi' ]]; then
       spliceai='ensembl_mane_v1.4'
@@ -350,6 +400,9 @@ images            ${params.bcftools_image}
                   ${params.vep_image}
 variants_in       \${variants_in}
 variants_tiered   \${variants_tiered}
+input_variants    \${variants_total}
+primary_variants  \${variants_retained}
+alt_removed       \${variants_removed}
 
 NOT VALIDATED FOR CLINICAL USE.
 Missing: nhomalt (no recessive homozygote filter), internal AF panel,
@@ -375,6 +428,7 @@ process COLLECT_RESULTS {
     path report
     path provenance
     path counts
+    path contig_filter_stats
     val sample_id
 
     output:
@@ -390,6 +444,7 @@ process COLLECT_RESULTS {
     cp '${report}' "results/${sample_id}.report.tsv"
     cp '${provenance}' "results/${sample_id}.provenance.txt"
     cp '${counts}' "results/${sample_id}.variant-counts.tsv"
+    cp '${contig_filter_stats}' "results/${sample_id}.contig-filter.tsv"
     """
 }
 
@@ -436,13 +491,21 @@ workflow {
 
     PRECHECK_REFERENCE(reference_release)
 
-    NORMALIZE(
+    FILTER_REFERENCE_CONTIGS(
         input_vcf,
         input_vcf_index,
         PRECHECK_REFERENCE.out.ready,
         sample_id,
         vcf_sha256,
         vcf_index_sha256,
+        reference_release,
+    )
+
+    NORMALIZE(
+        FILTER_REFERENCE_CONTIGS.out.vcf,
+        FILTER_REFERENCE_CONTIGS.out.index,
+        PRECHECK_REFERENCE.out.ready,
+        sample_id,
         reference_release,
     )
 
@@ -483,6 +546,7 @@ workflow {
 
     BUILD_PROVENANCE(
         PREFILTER.out.counts,
+        FILTER_REFERENCE_CONTIGS.out.stats,
         sample_id,
         reference_release,
         af_cutoff_value,
@@ -494,6 +558,7 @@ workflow {
         BUILD_REPORT.out.report,
         BUILD_PROVENANCE.out.provenance,
         PREFILTER.out.counts,
+        FILTER_REFERENCE_CONTIGS.out.stats,
         sample_id,
     )
 }
