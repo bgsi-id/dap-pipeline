@@ -1,2 +1,3 @@
 .nextflow*
 work/
+**/params.private.json
