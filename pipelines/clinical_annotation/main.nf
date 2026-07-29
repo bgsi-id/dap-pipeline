@@ -27,7 +27,7 @@ params.vep_cache_subdir = 'vep'
 params.vep_cache_version = '116'
 
 params.bcftools_image = 'quay.io/biocontainers/bcftools:1.21--h8b25389_0'
-params.echtvar_image = 'quay.io/biocontainers/echtvar:0.2.2--h4349ce8_0'
+params.echtvar_image = 'quay.io/biocontainers/echtvar@sha256:71cd0028f4aa9f7d012be3dc86b20e4df78fc5d8178d323c3c215a3f449a6244'
 params.vep_image = 'ensemblorg/ensembl-vep:release_116.0'
 
 
