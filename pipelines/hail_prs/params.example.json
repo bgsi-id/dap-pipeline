@@ -1,0 +1,11 @@
+{
+  "genotype_uri": "/path/to/cohort.mt",
+  "genotype_format": "mt",
+  "score_uri": "/path/to/PGS000765_hmPOS_GRCh38.txt.gz",
+  "score_id": "PGS000765",
+  "cohort_id": "example-cohort",
+  "reference_genome": "GRCh38",
+  "exclude_ambiguous": true,
+  "min_variant_match_rate": 0.9,
+  "output_dir": "results"
+}

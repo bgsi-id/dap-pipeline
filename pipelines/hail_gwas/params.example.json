@@ -1,0 +1,13 @@
+{
+  "genotype_uri": "/path/to/cohort.mt",
+  "genotype_format": "mt",
+  "phenotype_uri": "/path/to/phenotypes.tsv",
+  "cohort_id": "example-cohort",
+  "reference_genome": "GRCh38",
+  "sample_id_column": "s",
+  "phenotype_column": "bmi",
+  "phenotype_type": "quantitative",
+  "covariate_columns": "age,sex",
+  "n_pcs": 10,
+  "output_dir": "results"
+}

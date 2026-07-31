@@ -4,3 +4,11 @@ pipelines:
     path: pipelines/sample-vcf-smoke
     descriptor: pipelines/sample-vcf-smoke/pipeline.yaml
     active: true
+  - id: hail-cohort-gwas
+    path: pipelines/hail_gwas
+    descriptor: pipelines/hail_gwas/pipeline.yaml
+    active: true
+  - id: hail-cohort-prs
+    path: pipelines/hail_prs
+    descriptor: pipelines/hail_prs/pipeline.yaml
+    active: true
