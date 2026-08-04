@@ -1,7 +1,5 @@
 nextflow.enable.dsl = 2
 
-import groovy.json.JsonSlurper
-
 process VERIFY_SAMPLE_VCF {
     tag "verify-${sample_id}"
 
@@ -30,7 +28,7 @@ workflow {
         error "dap_input_manifest is required"
     }
 
-    def manifest = new JsonSlurper().parse(new File(params.dap_input_manifest as String))
+    def manifest = new groovy.json.JsonSlurper().parse(new File(params.dap_input_manifest as String))
     if (manifest.schema != 'urn:bgsi:dap:resolved-inputs:1' || !manifest.samples) {
         error "dap_input_manifest is invalid or empty"
     }
