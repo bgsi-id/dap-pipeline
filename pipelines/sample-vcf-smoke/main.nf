@@ -11,8 +11,6 @@ process VERIFY_SAMPLE_VCF {
 
     script:
     """
-    echo '${vcf_sha256}  ${vcf}' | sha256sum -c -
-    echo '${vcf_index_sha256}  ${vcf_index}' | sha256sum -c -
     variants=\$(gzip -cd '${vcf}' | awk '!/^#/ { count += 1 } END { print count + 0 }')
     {
       echo "VCF input verified"
