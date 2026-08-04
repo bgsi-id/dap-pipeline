@@ -1,0 +1,135 @@
+schema_version: "1.0"
+id: hail-cohort-gwas
+name: Cohort GWAS (Hail)
+version: 0.1.0
+description: >-
+  QC a cohort's genotypes, derive ancestry principal components, and run a
+  single-phenotype association scan with Manhattan and QQ plots.
+engine: nextflow
+engine_version: 26.04.6
+workflow_type: NFL
+workflow_type_version: DSL2
+entrypoint: main.nf
+tags:
+  - nextflow
+  - hail
+  - gwas
+  - cohort
+  - qc
+estimate: "20-80 CPU·h for 500-2000 samples"
+token_estimate: 40
+execution:
+  preferred_location: alor
+  compute_profiles:
+    - standard
+inputs:
+  - role: genotypes
+    parameter: genotype_uri
+    checksum_parameter: genotype_sha256
+    required: true
+  - role: bgen_sample
+    parameter: bgen_sample_uri
+    required: false
+  - role: phenotypes
+    parameter: phenotype_uri
+    checksum_parameter: phenotype_sha256
+    required: true
+outputs:
+  - name: sumstats
+    path: results/*.sumstats.tsv
+    media_type: text/tab-separated-values
+  - name: top_hits
+    path: results/*.top-hits.tsv
+    media_type: text/tab-separated-values
+  - name: manhattan
+    path: results/*.manhattan.html
+    media_type: text/html
+  - name: qq
+    path: results/*.qq.html
+    media_type: text/html
+  - name: principal_components
+    path: results/*.pcs.tsv
+    media_type: text/tab-separated-values
+  - name: sample_qc
+    path: results/*.sample-qc.tsv
+    media_type: text/tab-separated-values
+  - name: variant_qc
+    path: results/*.variant-qc.tsv
+    media_type: text/tab-separated-values
+  - name: provenance
+    path: results/*.provenance.txt
+    media_type: text/plain
+
+# PROPOSED SCHEMA EXTENSION — not yet consumed by svc-auth or svc-data.
+# The submission form on the svc-auth jobs page has nothing to render without
+# it: `inputs` only describes roles that resolve to DRS objects, and every
+# field below is a user decision that no resolver can supply.
+parameters:
+  - name: cohort_id
+    type: string
+    required: true
+    label: Cohort identifier
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+  - name: genotype_format
+    type: enum
+    required: true
+    default: mt
+    values: [mt, vcf, bgen]
+    label: Genotype format
+  - name: reference_genome
+    type: enum
+    required: true
+    default: GRCh38
+    values: [GRCh37, GRCh38]
+    label: Reference genome
+  - name: sample_id_column
+    type: string
+    required: true
+    default: s
+    label: Sample ID column in the phenotype file
+  - name: phenotype_column
+    type: string
+    required: true
+    label: Phenotype column
+  - name: phenotype_type
+    type: enum
+    required: true
+    default: quantitative
+    values: [quantitative, binary]
+    label: Phenotype type
+  - name: covariate_columns
+    type: string
+    required: false
+    default: ""
+    label: Covariate columns (comma-separated)
+    help: >-
+      Principal components are added automatically; list only phenotype-file
+      covariates such as age or sex.
+  - name: n_pcs
+    type: integer
+    required: false
+    default: 10
+    minimum: 1
+    maximum: 50
+    label: Principal components used as covariates
+  - name: min_maf
+    type: number
+    required: false
+    default: 0.01
+    minimum: 0
+    maximum: 1
+    label: Minimum minor allele frequency
+  - name: min_call_rate_variant
+    type: number
+    required: false
+    default: 0.95
+    minimum: 0
+    maximum: 1
+    label: Minimum variant call rate
+  - name: min_call_rate_sample
+    type: number
+    required: false
+    default: 0.95
+    minimum: 0
+    maximum: 1
+    label: Minimum sample call rate

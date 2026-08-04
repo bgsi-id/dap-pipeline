@@ -17,8 +17,12 @@ estimate: "<1 CPU·h"
 token_estimate: 1
 execution:
   preferred_location: alor
-  compute_profiles:
-    - standard
+  resource_profile: standard
+data_input:
+  contract: dap-pack-manifest/v1
+  accepted_pack_kinds:
+    - dataset
+    - cohort
 inputs:
   - role: vcf
     parameter: vcf_uri
@@ -30,5 +34,5 @@ inputs:
     required: true
 outputs:
   - name: summary
-    path: summary.txt
+    path: "*.summary.txt"
     media_type: text/plain
