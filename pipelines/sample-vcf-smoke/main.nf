@@ -2,6 +2,7 @@ nextflow.enable.dsl = 2
 
 process VERIFY_SAMPLE_VCF {
     tag "verify-${sample_id}"
+    publishDir params.dap_output_uri, mode: 'copy', overwrite: true
 
     input:
     tuple val(sample_id), path(vcf), val(vcf_sha256), path(vcf_index), val(vcf_index_sha256)
@@ -24,6 +25,9 @@ process VERIFY_SAMPLE_VCF {
 workflow {
     if (!params.dap_input_manifest) {
         error "dap_input_manifest is required"
+    }
+    if (!params.dap_output_uri) {
+        error "dap_output_uri is required"
     }
 
     def manifest = new groovy.json.JsonSlurper().parse(new File(params.dap_input_manifest as String))
