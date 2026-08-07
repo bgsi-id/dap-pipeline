@@ -1,0 +1,56 @@
+schema_version: "1.0"
+id: plink-case-control-gwas
+name: Case/control GWAS (PLINK2)
+version: 0.1.0
+description: >-
+  Convert a shared pVCF to PLINK triples, run Cloudfield-style pre-GWAS QC,
+  PCA and KING pruning, then Firth logistic association and GWAS plots from
+  two immutable cohort packs.
+engine: nextflow
+engine_version: 26.04.6
+workflow_type: NFL
+workflow_type_version: DSL2
+entrypoint: main.nf
+tags: [nextflow, plink2, gwas, cohort, qc]
+estimate: "20-80 CPU·h for 500-2000 samples"
+token_estimate: 40
+execution:
+  preferred_location: alor
+  compute_profiles: [standard]
+data_input:
+  contract: dap-pack-manifest/v2
+  accepted_pack_kinds: [cohort]
+  named_packs: [control, patient]
+  required_assets:
+    - role: pvcf
+      scope: release
+      required: true
+    - role: pvcf_index
+      scope: release
+      required: true
+parameters:
+  - name: cohort_id
+    type: string
+    required: true
+    label: Analysis identifier
+  - name: n_pcs
+    type: integer
+    required: false
+    default: 10
+    minimum: 1
+    maximum: 50
+    label: Principal components
+  - name: min_maf
+    type: number
+    required: false
+    default: 0.01
+    minimum: 0
+    maximum: 1
+    label: Minimum minor allele frequency
+outputs:
+  - {name: summary_statistics, path: results/*.sumstats.tsv, media_type: text/tab-separated-values}
+  - {name: top_hits, path: results/*.top-hits.tsv, media_type: text/tab-separated-values}
+  - {name: manhattan, path: results/*.manhattan.png, media_type: image/png}
+  - {name: qq, path: results/*.qq.png, media_type: image/png}
+  - {name: report, path: results/*.summary.json, media_type: application/json}
+  - {name: provenance, path: results/*.provenance.json, media_type: application/json}

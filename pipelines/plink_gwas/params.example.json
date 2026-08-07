@@ -1,0 +1,13 @@
+{
+  "dap_input_manifest": "/wes/inputs/resolved-inputs.json",
+  "cohort_id": "case-control-001",
+  "output_dir": "results",
+  "n_pcs": 10,
+  "min_maf": 0.01,
+  "pre_qc_geno": 0.01,
+  "min_geno": 0.02,
+  "min_mind": 0.02,
+  "min_hwe": "1e-6",
+  "king_cutoff": 0.0884,
+  "gwas_image": "ghcr.io/bgsi-id/dap-plink-gwas:0.1.0"
+}
