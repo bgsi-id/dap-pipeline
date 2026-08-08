@@ -168,7 +168,7 @@ process POST_GWAS {
     memory '4 GB'
     container params.plot_image
     publishDir { params.dap_output_uri }, mode: 'copy', overwrite: true,
-        enabled: { params.dap_output_uri != null }
+        failOnError: true
 
     input:
     path association
@@ -220,6 +220,7 @@ PY
 
 workflow {
     if (!params.dap_input_manifest || !params.cohort_id) error 'dap_input_manifest and cohort_id are required'
+    if (!params.dap_output_uri) error 'dap_output_uri is required for project output publishing'
     def resolved = new groovy.json.JsonSlurper().parse(file(params.dap_input_manifest))
     def assets = (resolved.release_assets ?: []).collectEntries { asset ->
         [(asset.role.toString().toLowerCase()): asset]
