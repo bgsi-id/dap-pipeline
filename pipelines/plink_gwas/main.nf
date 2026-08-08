@@ -73,7 +73,7 @@ process CONVERT_TO_PLINK {
     path pvcf_index
 
     output:
-    path 'raw.*'
+    path 'raw.*', emit: raw
     path 'prepared', emit: prepared
 
     script:
@@ -226,7 +226,7 @@ workflow {
     if (!pvcf_uri || !pvcf_index_uri) error 'resolved inputs must include pvcf and pvcf_index release assets'
     prepared = PREPARE_GWAS_INPUTS(file(params.dap_input_manifest))
     converted = CONVERT_TO_PLINK(prepared, file(pvcf_uri), file(pvcf_index_uri))
-    qc = PRE_GWAS_QC(converted.out, converted.prepared)
+    qc = PRE_GWAS_QC(converted.raw, converted.prepared)
     pca = PCA_AND_KING(qc)
     association = RUN_GWAS(qc, pca, converted.prepared)
     POST_GWAS(association, pca, qc, converted.prepared)
