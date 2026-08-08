@@ -9,7 +9,7 @@ process BUNDLE_RECEIPT {
     tag 'bundle-contract'
     cpus 1
     memory '1 GB'
-    container 'busybox:1.36.1'
+    container 'python:3.12-slim'
 
     input:
     val bundle

@@ -83,7 +83,7 @@ process WRITE_RESULTS {
     tag 'project-results'
     cpus 1
     memory '1 GB'
-    container 'busybox:1.36.1'
+    container 'python:3.12-slim'
     publishDir params.dap_output_uri, mode: 'copy', overwrite: true, failOnError: true
 
     input:
