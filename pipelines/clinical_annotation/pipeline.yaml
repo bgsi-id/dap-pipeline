@@ -1,0 +1,44 @@
+schema_version: "1.0"
+id: clinical-annotation
+name: Clinical annotation
+version: 0.1.0
+description: Prioritise clinically relevant small variants for one governed sample.
+engine: nextflow
+engine_version: 26.04.6
+workflow_type: NFL
+workflow_type_version: DSL2
+entrypoint: main.nf
+tags:
+  - nextflow
+  - interpretation-only
+  - clinical-annotation
+  - drs
+estimate: "<1 CPU·h"
+token_estimate: 8
+execution:
+  preferred_location: alor
+  resource_profile: standard
+data_input:
+  contract: dap-pack-manifest/v1
+  accepted_pack_kinds:
+    - dataset
+    - cohort
+inputs:
+  - role: vcf
+    parameter: vcf_uri
+    required: true
+  - role: vcf_index
+    parameter: vcf_index_uri
+    required: true
+parameters:
+  - name: sample_id
+    type: string
+    required: true
+  - name: reference_release
+    type: string
+    required: false
+    default: clinical-annotation-v1
+outputs:
+  - name: report
+    path: "results/*.report.tsv"
+    media_type: text/tab-separated-values

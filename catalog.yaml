@@ -1,5 +1,9 @@
 schema_version: "1.0"
 pipelines:
+  - id: clinical-annotation
+    path: pipelines/clinical_annotation
+    descriptor: pipelines/clinical_annotation/pipeline.yaml
+    active: true
   - id: nextflow-data-smoke
     path: pipelines/sample-vcf-smoke
     descriptor: pipelines/sample-vcf-smoke/pipeline.yaml
