@@ -1,0 +1,105 @@
+schema_version: "1.0"
+id: hail-cohort-prs
+name: Cohort polygenic score (Hail)
+version: 0.1.0
+description: >-
+  Apply a PGS Catalog scoring file to a cohort, measure how much of the score
+  the cohort actually carries, and emit per-sample scores with a distribution.
+engine: nextflow
+engine_version: 26.04.6
+workflow_type: NFL
+workflow_type_version: DSL2
+entrypoint: main.nf
+tags:
+  - nextflow
+  - hail
+  - prs
+  - pgs
+  - cohort
+estimate: "5-20 CPU·h for 500-2000 samples"
+token_estimate: 10
+execution:
+  preferred_location: alor
+  compute_profiles:
+    - standard
+inputs:
+  - role: genotypes
+    parameter: genotype_uri
+    checksum_parameter: genotype_sha256
+    required: true
+  - role: bgen_sample
+    parameter: bgen_sample_uri
+    required: false
+  - role: scoring_file
+    parameter: score_uri
+    checksum_parameter: score_sha256
+    required: true
+outputs:
+  - name: scores
+    path: results/*.scores.tsv
+    media_type: text/tab-separated-values
+  - name: distribution
+    path: results/*.score-distribution.html
+    media_type: text/html
+  - name: unmatched_weights
+    path: results/*.unmatched-weights.tsv
+    media_type: text/tab-separated-values
+  - name: match_metrics
+    path: results/*.match-metrics.tsv
+    media_type: text/tab-separated-values
+  - name: provenance
+    path: results/*.provenance.txt
+    media_type: text/plain
+
+# PROPOSED SCHEMA EXTENSION — not yet consumed by svc-auth or svc-data.
+# See the same block in pipelines/hail_gwas/pipeline.yaml.
+parameters:
+  - name: cohort_id
+    type: string
+    required: true
+    label: Cohort identifier
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+  - name: score_id
+    type: string
+    required: true
+    label: Score identifier
+    help: PGS Catalog accession such as PGS000765, recorded in provenance.
+    pattern: "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+  - name: genotype_format
+    type: enum
+    required: true
+    default: mt
+    values: [mt, vcf, bgen]
+    label: Genotype format
+  - name: reference_genome
+    type: enum
+    required: true
+    default: GRCh38
+    values: [GRCh37, GRCh38]
+    label: Reference genome
+    help: >-
+      Must match the build of the scoring file's coordinates. Use a harmonised
+      PGS Catalog file (hmPOS) built for this genome.
+  - name: exclude_ambiguous
+    type: boolean
+    required: false
+    default: true
+    label: Exclude strand-ambiguous variants
+    help: >-
+      A/T and C/G sites cannot be oriented by allele identity. Including them
+      risks sign-flipped weights.
+  - name: min_variant_match_rate
+    type: number
+    required: false
+    default: 0.9
+    minimum: 0
+    maximum: 1
+    label: Minimum fraction of score variants present in the cohort
+    help: The run fails below this rather than publishing a partial score.
+  - name: max_sample_missing_rate
+    type: number
+    required: false
+    default: 0.1
+    minimum: 0
+    maximum: 1
+    label: Maximum per-sample missing genotype rate
