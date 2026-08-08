@@ -87,14 +87,16 @@ process WRITE_RESULTS {
     publishDir params.dap_output_uri, mode: 'copy', overwrite: true, failOnError: true
 
     input:
-    path results
+    path source_results, name: 'source-results'
 
     output:
-    path results
+    path 'results'
 
     script:
     """
     test -n '${params.dap_output_uri}'
-    test -d results
+    test -d source-results
+    mkdir results
+    cp -a source-results/. results/
     """
 }
