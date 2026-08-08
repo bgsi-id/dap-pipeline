@@ -79,7 +79,7 @@ process CONVERT_TO_PLINK {
     script:
     """
     set -euo pipefail
-    plink --vcf '${pvcf}' --double-id --keep prepared/keep.txt --keep-allele-order --make-bed --out raw
+    plink --vcf '${pvcf}' --id-delim '_' --keep prepared/keep.txt --keep-allele-order --make-bed --out raw
     awk 'NR > 1 { print \$1, \$2 }' raw.fam | sort > imported-samples.txt
     awk '{ print \$2 }' prepared/keep.txt | sort > requested-samples.txt
     if ! diff -u requested-samples.txt imported-samples.txt; then
