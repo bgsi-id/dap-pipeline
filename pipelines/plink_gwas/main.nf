@@ -1,5 +1,7 @@
 nextflow.enable.dsl = 2
 
+include { READ_BUNDLES; WRITE_RESULTS } from '../base_nf/modules/bundle'
+
 /*
  * Governed case/control GWAS, based on the Cloudfield GWASTutorial workflow:
  * source pVCF -> PLINK triples -> QC/PCA/KING -> Firth logistic GWAS -> plots.
@@ -26,7 +28,7 @@ process PREPARE_GWAS_INPUTS {
     container params.python_image
 
     input:
-    path manifest
+    val bundle
 
     output:
     path 'prepared'
@@ -35,28 +37,22 @@ process PREPARE_GWAS_INPUTS {
     """
     set -euo pipefail
     mkdir prepared
-    python3 - '${manifest}' prepared <<'PY'
-import json, pathlib, sys
-manifest = json.load(open(sys.argv[1])); out = pathlib.Path(sys.argv[2])
-if manifest.get('schema') != 'urn:bgsi:dap:resolved-inputs:2':
-    raise SystemExit('requires dap resolved-inputs v2')
-cohorts = manifest.get('cohorts', {})
+    python3 - prepared '${groovy.json.JsonOutput.toJson(bundle).bytes.encodeBase64().toString()}' <<'PY'
+import base64, json, pathlib, sys
+bundle = json.loads(base64.b64decode(sys.argv[2])); out = pathlib.Path(sys.argv[1])
+cohorts = bundle.get('cohorts', {})
 control = cohorts.get('control', {}).get('samples', [])
 patient = cohorts.get('patient', {}).get('samples', [])
 if not control or not patient:
     raise SystemExit('control and patient cohorts must be non-empty')
 if set(control) & set(patient):
     raise SystemExit('control and patient cohort packs overlap')
-assets = {item['role']: item for item in manifest.get('release_assets', [])}
-for role in ('pvcf', 'pvcf_index'):
-    if not assets.get(role, {}).get('access_uri'):
-        raise SystemExit(f'missing release asset: {role}')
 # PLINK case/control convention is 1=control and 2=case; zero is missing.
 (out / 'keep.txt').write_text(''.join(f'{sample} {sample}\\n' for sample in control + patient))
 (out / 'phenotype.txt').write_text('FID IID B1\\n' + ''.join(f'{sample} {sample} 1\\n' for sample in control) + ''.join(f'{sample} {sample} 2\\n' for sample in patient))
 (out / 'provenance.json').write_text(json.dumps({
-    'analysis_id': '${params.cohort_id}', 'manifest_sha256': manifest.get('manifest_sha256'),
-    'dataset': manifest.get('dataset'), 'control': cohorts['control'], 'patient': cohorts['patient'],
+    'analysis_id': '${params.cohort_id}', 'manifest_sha256': bundle.get('manifest_sha256'),
+    'dataset': bundle.get('dataset'), 'control': cohorts['control'], 'patient': cohorts['patient'],
 }, indent=2, sort_keys=True) + '\\n')
 PY
     """
@@ -70,8 +66,7 @@ process CONVERT_TO_PLINK {
 
     input:
     path prepared
-    path pvcf
-    path pvcf_index
+    tuple path(pvcf), path(pvcf_index)
 
     output:
     path 'raw.*', emit: raw
@@ -167,8 +162,6 @@ process POST_GWAS {
     cpus 1
     memory '4 GB'
     container params.plot_image
-    publishDir { params.dap_output_uri }, mode: 'copy', overwrite: true,
-        failOnError: true
 
     input:
     path association
@@ -221,17 +214,18 @@ PY
 workflow {
     if (!params.dap_input_manifest || !params.cohort_id) error 'dap_input_manifest and cohort_id are required'
     if (!params.dap_output_uri) error 'dap_output_uri is required for project output publishing'
-    def resolved = new groovy.json.JsonSlurper().parse(file(params.dap_input_manifest))
-    def assets = (resolved.release_assets ?: []).collectEntries { asset ->
-        [(asset.role.toString().toLowerCase()): asset]
+    bundles = READ_BUNDLES(Channel.value(file(params.dap_input_manifest)))
+    release_inputs = bundles.bundle.map { bundle ->
+        def pvcf = bundle.release_assets.pvcf
+        def pvcf_index = bundle.release_assets.pvcf_index
+        if (!pvcf || !pvcf_index) error 'PLINK GWAS requires pvcf and pvcf_index release assets'
+        tuple(file(pvcf.access_uri), file(pvcf_index.access_uri))
     }
-    def pvcf_uri = assets.pvcf?.access_uri
-    def pvcf_index_uri = assets.pvcf_index?.access_uri
-    if (!pvcf_uri || !pvcf_index_uri) error 'resolved inputs must include pvcf and pvcf_index release assets'
-    prepared = PREPARE_GWAS_INPUTS(file(params.dap_input_manifest))
-    converted = CONVERT_TO_PLINK(prepared, file(pvcf_uri), file(pvcf_index_uri))
+    prepared = PREPARE_GWAS_INPUTS(bundles.bundle)
+    converted = CONVERT_TO_PLINK(prepared, release_inputs)
     qc = PRE_GWAS_QC(converted.raw, converted.prepared)
     pca = PCA_AND_KING(qc)
     association = RUN_GWAS(qc, pca, converted.prepared)
-    POST_GWAS(association, pca, qc, converted.prepared)
+    results = POST_GWAS(association, pca, qc, converted.prepared)
+    WRITE_RESULTS(results)
 }
