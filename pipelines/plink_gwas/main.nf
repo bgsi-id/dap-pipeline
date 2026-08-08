@@ -6,6 +6,7 @@ nextflow.enable.dsl = 2
  * The only phenotype authority is the two resolved immutable cohort packs.
  */
 params.dap_input_manifest = null
+params.dap_output_uri = null
 params.cohort_id = null
 params.output_dir = 'results'
 params.n_pcs = 10
@@ -166,6 +167,8 @@ process POST_GWAS {
     cpus 1
     memory '4 GB'
     container params.plot_image
+    publishDir { params.dap_output_uri }, mode: 'copy', overwrite: true,
+        enabled: { params.dap_output_uri != null }
 
     input:
     path association
@@ -199,7 +202,7 @@ with (out / f'{prefix}.top-hits.tsv').open('w') as handle:
     writer = csv.DictWriter(handle, fieldnames=list(rows[0][0]) if rows else ['ID','P'], delimiter='\t')
     writer.writeheader(); writer.writerows(row for row, _ in rows[:100])
 summary = {'tested_variants': len(rows), 'top_hit': rows[0][0] if rows else None}
-(out / f'{prefix}.summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True) + '\n')
+(out / f'{prefix}.summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True))
 try:
     import matplotlib.pyplot as plt
     chrom = [str(row.get('#CHROM') or row.get('CHROM') or '') for row, _ in rows]
