@@ -9,5 +9,6 @@
   "min_mind": 0.02,
   "min_hwe": "1e-6",
   "king_cutoff": 0.0884,
-  "gwas_image": "ghcr.io/bgsi-id/dap-plink-gwas:0.1.0"
+  "plink_image": "quay.io/biocontainers/plink:1.90b6.21--h779adbc_1",
+  "plink2_image": "quay.io/biocontainers/plink2:2.00a5.12--h9948957_1"
 }

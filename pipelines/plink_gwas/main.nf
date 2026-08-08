@@ -18,22 +18,23 @@ params.het_sd = 0.1
 params.king_cutoff = 0.0884
 params.cpus = 8
 
-process STAGE_GWAS_INPUTS {
+process PREPARE_GWAS_INPUTS {
     tag "${params.cohort_id}"
     cpus 1
     memory '2 GB'
+    container params.python_image
 
     input:
     path manifest
 
     output:
-    path 'stage'
+    path 'prepared'
 
     script:
     """
     set -euo pipefail
-    mkdir stage
-    python3 - '${manifest}' stage <<'PY'
+    mkdir prepared
+    python3 - '${manifest}' prepared <<'PY'
 import json, pathlib, sys
 manifest = json.load(open(sys.argv[1])); out = pathlib.Path(sys.argv[2])
 if manifest.get('schema') != 'urn:bgsi:dap:resolved-inputs:2':
@@ -52,18 +53,11 @@ for role in ('pvcf', 'pvcf_index'):
 # PLINK case/control convention is 1=control and 2=case; zero is missing.
 (out / 'keep.txt').write_text(''.join(f'{sample} {sample}\\n' for sample in control + patient))
 (out / 'phenotype.txt').write_text('FID IID B1\\n' + ''.join(f'{sample} {sample} 1\\n' for sample in control) + ''.join(f'{sample} {sample} 2\\n' for sample in patient))
-(out / 'pvcf.uri').write_text(assets['pvcf']['access_uri'] + '\\n')
-(out / 'pvcf_index.uri').write_text(assets['pvcf_index']['access_uri'] + '\\n')
 (out / 'provenance.json').write_text(json.dumps({
     'analysis_id': '${params.cohort_id}', 'manifest_sha256': manifest.get('manifest_sha256'),
     'dataset': manifest.get('dataset'), 'control': cohorts['control'], 'patient': cohorts['patient'],
 }, indent=2, sort_keys=True) + '\\n')
 PY
-    PVCF_URI=\$(cat stage/pvcf.uri)
-    INDEX_URI=\$(cat stage/pvcf_index.uri)
-    case "\$PVCF_URI" in s3://*) aws s3 cp "\$PVCF_URI" stage/input.vcf.gz ;; *) cp "\$PVCF_URI" stage/input.vcf.gz ;; esac
-    case "\$INDEX_URI" in s3://*) aws s3 cp "\$INDEX_URI" stage/input.vcf.gz.tbi ;; *) cp "\$INDEX_URI" stage/input.vcf.gz.tbi ;; esac
-    tabix -l stage/input.vcf.gz >/dev/null
     """
 }
 
@@ -71,20 +65,23 @@ process CONVERT_TO_PLINK {
     tag "${params.cohort_id}"
     cpus params.cpus
     memory '16 GB'
+    container params.plink_image
 
     input:
-    path stage
+    path prepared
+    path pvcf
+    path pvcf_index
 
     output:
     path 'raw.*'
-    path 'stage', emit: stage
+    path 'prepared', emit: prepared
 
     script:
     """
     set -euo pipefail
-    plink --vcf stage/input.vcf.gz --double-id --keep stage/keep.txt --keep-allele-order --make-bed --out raw
+    plink --vcf '${pvcf}' --double-id --keep prepared/keep.txt --keep-allele-order --make-bed --out raw
     awk 'NR > 1 { print \$1, \$2 }' raw.fam | sort > imported-samples.txt
-    awk '{ print \$2 }' stage/keep.txt | sort > requested-samples.txt
+    awk '{ print \$2 }' prepared/keep.txt | sort > requested-samples.txt
     if ! diff -u requested-samples.txt imported-samples.txt; then
       echo 'Resolved cohort membership is not fully present in the pVCF' >&2
       exit 1
@@ -96,14 +93,14 @@ process PRE_GWAS_QC {
     tag "${params.cohort_id}"
     cpus params.cpus
     memory '24 GB'
+    container params.plink_image
 
     input:
     path raw
-    path stage
+    path prepared
 
     output:
     path 'pregwas'
-    path 'stage', emit: stage
 
     script:
     """
@@ -115,10 +112,29 @@ process PRE_GWAS_QC {
     plink --bfile raw --extract pregwas/qc-prune.prune.in --het --out pregwas/qc-het
     awk 'NR > 1 && (\$6 > ${params.het_sd} || \$6 < -${params.het_sd}) { print \$1, \$2 }' pregwas/qc-het.het > pregwas/high-het.sample
     plink --bfile raw --geno ${params.min_geno} --mind ${params.min_mind} --hwe ${params.min_hwe} --remove pregwas/high-het.sample --keep-allele-order --make-bed --out pregwas/clean
-    plink2 --bfile pregwas/clean --maf ${params.min_maf} --indep-pairwise 500 50 0.2 --out pregwas/pca-prune
-    plink2 --bfile pregwas/clean --extract pregwas/pca-prune.prune.in --king-cutoff ${params.king_cutoff} --out pregwas/king
-    plink2 --bfile pregwas/clean --keep pregwas/king.king.cutoff.in.id --extract pregwas/pca-prune.prune.in --freq counts --pca approx allele-wts ${params.n_pcs} --out pregwas/pca
-    plink2 --bfile pregwas/clean --read-freq pregwas/pca.acount --score pregwas/pca.eigenvec.allele 2 6 header-read no-mean-imputation variance-standardize --score-col-nums 7-${params.n_pcs + 6} --out pregwas/pca-projected
+    """
+}
+
+process PCA_AND_KING {
+    tag "${params.cohort_id}"
+    cpus params.cpus
+    memory '24 GB'
+    container params.plink2_image
+
+    input:
+    path pregwas
+
+    output:
+    path 'pca'
+
+    script:
+    """
+    set -euo pipefail
+    mkdir pca
+    plink2 --bfile pregwas/clean --maf ${params.min_maf} --indep-pairwise 500 50 0.2 --out pca/pca-prune
+    plink2 --bfile pregwas/clean --extract pca/pca-prune.prune.in --king-cutoff ${params.king_cutoff} --out pca/king
+    plink2 --bfile pregwas/clean --keep pca/king.king.cutoff.in.id --extract pca/pca-prune.prune.in --freq counts --pca approx allele-wts ${params.n_pcs} --out pca/pca
+    plink2 --bfile pregwas/clean --read-freq pca/pca.acount --score pca/pca.eigenvec.allele 2 6 header-read no-mean-imputation variance-standardize --score-col-nums 7-${params.n_pcs + 6} --out pca/pca-projected
     """
 }
 
@@ -126,22 +142,22 @@ process RUN_GWAS {
     tag "${params.cohort_id}"
     cpus params.cpus
     memory '32 GB'
+    container params.plink2_image
 
     input:
     path pregwas
-    path stage
+    path pca
+    path prepared
 
     output:
     path 'association'
-    path 'pregwas', emit: pregwas
-    path 'stage', emit: stage
 
     script:
     def pcNames = (1..params.n_pcs).collect { "PC${it}_AVG" }.join(',')
     """
     set -euo pipefail
     mkdir association
-    plink2 --bfile pregwas/clean --keep pregwas/king.king.cutoff.in.id --pheno stage/phenotype.txt --pheno-name B1 --maf ${params.min_maf} --covar pregwas/pca-projected.sscore --covar-name ${pcNames} --glm hide-covar firth firth-residualize single-prec-cc --threads ${task.cpus} --out association/${params.cohort_id}
+    plink2 --bfile pregwas/clean --keep pca/king.king.cutoff.in.id --pheno prepared/phenotype.txt --pheno-name B1 --maf ${params.min_maf} --covar pca/pca-projected.sscore --covar-name ${pcNames} --glm hide-covar firth firth-residualize single-prec-cc --threads ${task.cpus} --out association/${params.cohort_id}
     """
 }
 
@@ -149,11 +165,13 @@ process POST_GWAS {
     tag "${params.cohort_id}"
     cpus 1
     memory '4 GB'
+    container params.plot_image
 
     input:
     path association
+    path pca
     path pregwas
-    path stage
+    path prepared
 
     output:
     path "${params.output_dir}"
@@ -163,9 +181,10 @@ process POST_GWAS {
     set -euo pipefail
     mkdir -p '${params.output_dir}'
     cp association/${params.cohort_id}.B1.glm.firth '${params.output_dir}/${params.cohort_id}.sumstats.tsv'
-    cp stage/provenance.json '${params.output_dir}/${params.cohort_id}.provenance.json'
+    cp prepared/provenance.json '${params.output_dir}/${params.cohort_id}.provenance.json'
     cp pregwas/basic.{imiss,lmiss,frq,hwe} '${params.output_dir}/'
-    cp pregwas/{qc-prune.prune.in,high-het.sample,king.king.cutoff.in.id,pca.eigenvec,pca-projected.sscore} '${params.output_dir}/'
+    cp pregwas/{qc-prune.prune.in,high-het.sample} '${params.output_dir}/'
+    cp pca/{king.king.cutoff.in.id,pca.eigenvec,pca-projected.sscore} '${params.output_dir}/'
     python3 - association/${params.cohort_id}.B1.glm.firth '${params.output_dir}' '${params.cohort_id}' <<'PY'
 import csv, json, math, pathlib, sys
 source, out, prefix = map(pathlib.Path, sys.argv[1:])
@@ -198,9 +217,17 @@ PY
 
 workflow {
     if (!params.dap_input_manifest || !params.cohort_id) error 'dap_input_manifest and cohort_id are required'
-    staged = STAGE_GWAS_INPUTS(file(params.dap_input_manifest))
-    converted = CONVERT_TO_PLINK(staged)
-    qc = PRE_GWAS_QC(converted.out, converted.stage)
-    association = RUN_GWAS(qc.out, qc.stage)
-    POST_GWAS(association.out, association.pregwas, association.stage)
+    def resolved = new groovy.json.JsonSlurper().parse(file(params.dap_input_manifest))
+    def assets = (resolved.release_assets ?: []).collectEntries { asset ->
+        [(asset.role.toString().toLowerCase()): asset]
+    }
+    def pvcf_uri = assets.pvcf?.access_uri
+    def pvcf_index_uri = assets.pvcf_index?.access_uri
+    if (!pvcf_uri || !pvcf_index_uri) error 'resolved inputs must include pvcf and pvcf_index release assets'
+    prepared = PREPARE_GWAS_INPUTS(file(params.dap_input_manifest))
+    converted = CONVERT_TO_PLINK(prepared, file(pvcf_uri), file(pvcf_index_uri))
+    qc = PRE_GWAS_QC(converted.out, converted.prepared)
+    pca = PCA_AND_KING(qc)
+    association = RUN_GWAS(qc, pca, converted.prepared)
+    POST_GWAS(association, pca, qc, converted.prepared)
 }
