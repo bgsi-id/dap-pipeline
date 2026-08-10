@@ -43,14 +43,6 @@ def safe_component(def value, String label) {
 }
 
 
-// dap-runtime may provide a run URI ending in '/'.  Keep exactly one path
-// separator when deriving managed output prefixes; ClickHouse's S3 reader
-// treats a doubled separator as a distinct object key.
-def normalized_output_uri() {
-    return params.dap_output_uri.toString().replaceFirst('/+$', '')
-}
-
-
 def sample_from_asset(def sample) {
     def assets = (sample.assets ?: []).collectEntries { asset ->
         [(asset.role?.toString()?.toLowerCase()): asset]
@@ -120,7 +112,7 @@ process INGEST_SAMPLE {
     cpus 4
     memory '12 GB'
     time '12h'
-    publishDir "${normalized_output_uri()}/ingestion", mode: 'copy', overwrite: true, failOnError: true
+    publishDir "${params.dap_output_uri}/ingestion", mode: 'copy', overwrite: true, failOnError: true
 
     input:
     tuple val(sample_id), path(input_vcf), val(vcf_sha256), path(input_index), val(index_sha256), val(run_id)
@@ -168,7 +160,7 @@ process LOAD_VARIANTS {
     set -euo pipefail
     variant_etl_control.py load-variants \
       --local-root '${parquet_tree}' \
-      --published-root '${normalized_output_uri()}/ingestion/${run_id}' \
+      --published-root '${params.dap_output_uri}/ingestion/${run_id}' \
       --clickhouse-url '${params.clickhouse_url}' \
       --database '${params.clickhouse_database}' \
       --region '${params.aws_region}' \
@@ -388,7 +380,7 @@ process COLLECT_RESULTS {
     container params.variant_image
     cpus 1
     memory '2 GB'
-    publishDir normalized_output_uri(), mode: 'copy', overwrite: true, failOnError: true
+    publishDir params.dap_output_uri, mode: 'copy', overwrite: true, failOnError: true
 
     input:
     path site_base_vcf
@@ -428,6 +420,7 @@ PY
 workflow {
     if (!params.dap_input_manifest) error 'dap_input_manifest is required'
     if (!params.dap_output_uri) error 'dap_output_uri is required'
+    params.dap_output_uri = params.dap_output_uri.toString().replaceFirst('/+$', '')
     if (!params.variant_image) {
         error 'variant_image is required and must be injected by the deployment/runtime'
     }
