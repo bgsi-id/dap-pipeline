@@ -17,7 +17,7 @@ params.output_dir = 'results'
 params.release_id = null
 params.batch_id = null
 params.assembly = 'GRCh38'
-params.annotation_pack = 'grch38-v1'
+params.annotation_pack = 'grch38-v2'
 params.af_threshold = 0.01
 params.max_annotation_variants = null
 params.reference_dir = '/reference'
@@ -320,6 +320,7 @@ process ANNOTATE_DETAIL_VEP {
         --assembly '${params.assembly}' \
         --fasta '${params.reference_dir}/${params.fasta_name}' \
         --mane --canonical --symbol --biotype --hgvs --hgvsg \
+        --allele_number --sift b --polyphen b \
         --shift_hgvs 1 --numbers --domains --protein --uniprot \
         --flag_pick --pick_order mane_select,mane_plus_clinical,canonical,rank \
         --fork ${task.cpus} --buffer_size ${params.vep_buffer_size} \

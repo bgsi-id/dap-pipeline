@@ -3,7 +3,7 @@
   "dap_output_uri": "s3://example-workdir/variants/runs/hg001-hg002",
   "batch_id": "hg001-hg002",
   "assembly": "GRCh38",
-  "annotation_pack": "grch38-v1",
+  "annotation_pack": "grch38-v2",
   "af_threshold": 0.01,
   "reference_dir": "/reference"
 }

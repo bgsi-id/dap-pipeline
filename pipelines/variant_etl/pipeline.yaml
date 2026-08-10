@@ -1,7 +1,7 @@
 schema_version: "1.0"
 id: variant-etl
 name: Variant ETL
-version: 0.2.5
+version: 0.2.6
 description: >-
   Extract one or many governed single-sample VCFs into Parquet and ClickHouse,
   then incrementally annotate previously unseen sites with gnomAD, local CSQ
@@ -34,7 +34,7 @@ parameters:
   - name: annotation_pack
     type: string
     required: false
-    default: grch38-v1
+    default: grch38-v2
   - name: af_threshold
     type: number
     required: false

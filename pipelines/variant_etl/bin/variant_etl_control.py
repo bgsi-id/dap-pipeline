@@ -189,18 +189,48 @@ def unique(values):
     return list(dict.fromkeys(value for value in values if value and value != "."))
 
 
+def present(value: str | None) -> str | None:
+    return None if value in (None, "", ".") else value
+
+
 def detail_values(raw: str | None, fields: list[str]):
     if not raw or raw == "." or not fields:
-        return None, [], None, []
+        return {
+            "hgnc": None, "hgnc_id": None, "vep_consequence": [],
+            "vep_impact": None, "vep_sift": None, "vep_polyphen": None,
+            "vep_transcript_id": None, "vep_hgvsc": None, "vep_hgvsp": None,
+            "vep_lof": None, "vep_lof_filter": None, "vep_lof_flags": None,
+            "records": [],
+        }
     records = [dict(zip(fields, entry.split("|"))) for entry in raw.split(",")]
-    genes = unique(record.get("SYMBOL") for record in records)
     consequences = unique(
         consequence
         for record in records
         for consequence in record.get("Consequence", "").split("&")
     )
-    polyphen = unique(record.get("PolyPhen") for record in records)
-    return (genes[0] if genes else None), consequences, (polyphen[0] if polyphen else None), records
+    preferred = next((record for record in records if record.get("PICK") == "1"), None)
+    preferred = preferred or next(
+        (record for record in records if present(record.get("MANE_SELECT"))), None
+    )
+    preferred = preferred or next(
+        (record for record in records if record.get("CANONICAL") in {"1", "YES"}), None
+    )
+    preferred = preferred or records[0]
+    return {
+        "hgnc": present(preferred.get("SYMBOL")),
+        "hgnc_id": present(preferred.get("HGNC_ID")),
+        "vep_consequence": consequences,
+        "vep_impact": present(preferred.get("IMPACT")),
+        "vep_sift": present(preferred.get("SIFT")),
+        "vep_polyphen": present(preferred.get("PolyPhen")),
+        "vep_transcript_id": present(preferred.get("Feature")),
+        "vep_hgvsc": present(preferred.get("HGVSc")),
+        "vep_hgvsp": present(preferred.get("HGVSp")),
+        "vep_lof": present(preferred.get("LoF")),
+        "vep_lof_filter": present(preferred.get("LoF_filter")),
+        "vep_lof_flags": present(preferred.get("LoF_flags")),
+        "records": records,
+    }
 
 
 def send_json_rows(client, url, database, table, rows, batch_size=5000):
@@ -230,13 +260,29 @@ def load_annotations(args: argparse.Namespace) -> None:
 ENGINE = ReplacingMergeTree(annotated_at) ORDER BY (annotation_pack,variant_id)""",
         f"""CREATE TABLE IF NOT EXISTS {detail_table}
 (variant_id String, annotation_pack String, hgnc Nullable(String),
- vep_consequence Array(String), vep_polyphen Nullable(String), raw_csq String,
+ hgnc_id Nullable(String), vep_consequence Array(String),
+ vep_impact Nullable(String), vep_sift Nullable(String), vep_polyphen Nullable(String),
+ vep_transcript_id Nullable(String), vep_hgvsc Nullable(String), vep_hgvsp Nullable(String),
+ vep_lof Nullable(String), vep_lof_filter Nullable(String), vep_lof_flags Nullable(String),
+ raw_csq String,
  annotated_at DateTime DEFAULT now())
 ENGINE = ReplacingMergeTree(annotated_at) ORDER BY (annotation_pack,variant_id)""",
         f"""CREATE TABLE IF NOT EXISTS {completion_table}
 (variant_id String, annotation_pack String, completed_at DateTime DEFAULT now())
 ENGINE = ReplacingMergeTree(completed_at) ORDER BY (annotation_pack,variant_id)""",
     ]
+    detail_columns = {
+        "hgnc_id": "Nullable(String)",
+        "vep_impact": "Nullable(String)",
+        "vep_sift": "Nullable(String)",
+        "vep_transcript_id": "Nullable(String)",
+        "vep_hgvsc": "Nullable(String)",
+        "vep_hgvsp": "Nullable(String)",
+        "vep_lof": "Nullable(String)",
+        "vep_lof_filter": "Nullable(String)",
+        "vep_lof_flags": "Nullable(String)",
+    }
+    serving_columns = dict(detail_columns)
     detail_time = datetime.now(timezone.utc).replace(microsecond=0)
     base_time = detail_time - timedelta(seconds=1)
     base_version = base_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -266,18 +312,23 @@ ENGINE = ReplacingMergeTree(completed_at) ORDER BY (annotation_pack,variant_id)"
 
     def detail_rows():
         for variant_id, info, fields in vcf_rows(args.detail_vcf):
-            gene, consequences, polyphen, records = detail_values(info.get("CSQ"), fields)
+            values = detail_values(info.get("CSQ"), fields)
             yield {
                 "variant_id": variant_id, "annotation_pack": args.annotation_pack,
-                "hgnc": gene, "vep_consequence": consequences,
-                "vep_polyphen": polyphen,
-                "raw_csq": json.dumps(records, separators=(",", ":")),
+                **{key: value for key, value in values.items() if key != "records"},
+                "raw_csq": json.dumps(values["records"], separators=(",", ":")),
                 "gnomad_af": nullable_float(info.get("gnomad_af")),
             }
 
     with httpx.Client(timeout=httpx.Timeout(600, connect=5), trust_env=False) as client:
         for statement in ddl:
             sql(client, args.clickhouse_url, args.database, statement)
+        for column, column_type in detail_columns.items():
+            sql(client, args.clickhouse_url, args.database,
+                f"ALTER TABLE {detail_table} ADD COLUMN IF NOT EXISTS {column} {column_type}")
+        for column, column_type in serving_columns.items():
+            sql(client, args.clickhouse_url, args.database,
+                f"ALTER TABLE {serving_table} ADD COLUMN IF NOT EXISTS {column} {column_type}")
         base_count = send_json_rows(client, args.clickhouse_url, args.database, base_table, base_rows())
         # This projection makes every base site immediately visible to the API
         # and also acts as the annotation-pack anti-join authority.
@@ -294,7 +345,13 @@ ENGINE = ReplacingMergeTree(completed_at) ORDER BY (annotation_pack,variant_id)"
             (
                 {
                     "variant_id": row["variant_id"], "annotation_pack": args.annotation_pack,
-                    "hgnc": row["hgnc"], "vep_consequence": row["vep_consequence"],
+                    "hgnc": row["hgnc"], "hgnc_id": row["hgnc_id"],
+                    "vep_consequence": row["vep_consequence"],
+                    "vep_impact": row["vep_impact"], "vep_sift": row["vep_sift"],
+                    "vep_transcript_id": row["vep_transcript_id"],
+                    "vep_hgvsc": row["vep_hgvsc"], "vep_hgvsp": row["vep_hgvsp"],
+                    "vep_lof": row["vep_lof"], "vep_lof_filter": row["vep_lof_filter"],
+                    "vep_lof_flags": row["vep_lof_flags"],
                     "clinvar_significance": [], "clinvar_trait": [], "clinvar_scv": [],
                     "cadd": None, "vep_polyphen": row["vep_polyphen"], "phylop": None,
                     "gnomad_af": row["gnomad_af"],

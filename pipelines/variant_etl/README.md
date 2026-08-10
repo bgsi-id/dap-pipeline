@@ -38,7 +38,9 @@ published Parquet prefix using its own workload identity.
 5. Add inexpensive site-local `BCSQ` with `bcftools csq --local-csq`.
 6. Keep missing-frequency and `AF < af_threshold` sites.
 7. Run the original offline VEP only on that reduced set, using the mounted
-   merged cache and FASTA.
+   merged cache and FASTA. The VEP projection retains every transcript CSQ
+   record and derives query columns from PICK, then MANE, then canonical
+   transcript priority. Allele number, SIFT and PolyPhen are enabled.
 8. Load base and detailed annotation projections into ClickHouse and publish
    the audit VCFs and metrics.
 
@@ -72,3 +74,9 @@ The current detailed predicate is intentionally conservative: gnomAD AF is
 missing or below the threshold. ClinVar rescue, high-impact BCSQ rescue and
 supplementary VEP plugins can be added to that predicate without changing the
 pipeline topology.
+
+LoFTEE columns are reserved in the detailed and serving projections. LoFTEE
+itself remains disabled until the mounted reference release contains a plugin
+compatible with VEP 116 plus its GRCh38 ancestor FASTA, GERP bigWig and SQL
+assets; enabling it without that governed bundle would make non-empty runs
+non-reproducible.
