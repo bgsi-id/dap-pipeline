@@ -1,0 +1,51 @@
+schema_version: "1.0"
+id: variant-etl
+name: Variant ETL
+version: 0.1.0
+description: >-
+  Extract one or many governed single-sample VCFs into Parquet and ClickHouse,
+  then incrementally annotate previously unseen sites with gnomAD, local CSQ
+  and detailed VEP consequences.
+engine: nextflow
+engine_version: 26.04.6
+workflow_type: NFL
+workflow_type_version: DSL2
+entrypoint: main.nf
+tags: [nextflow, variant, ingestion, annotation, clickhouse]
+estimate: "Input-dependent; extraction scales horizontally by sample"
+token_estimate: 20
+execution:
+  preferred_location: alor
+  compute_profiles: [standard]
+data_input:
+  contract: dap-pack-manifest/v2
+  accepted_pack_kinds: [dataset, cohort]
+  required_assets:
+    - role: variant_input_manifest
+      scope: release
+      required: true
+parameters:
+  - name: variant_image
+    type: string
+    required: true
+    label: Deployment-provided DAP Variant image
+  - name: release_id
+    type: string
+    required: true
+  - name: batch_id
+    type: string
+    required: true
+  - name: annotation_pack
+    type: string
+    required: false
+    default: grch38-v1
+  - name: af_threshold
+    type: number
+    required: false
+    default: 0.01
+    minimum: 0
+    maximum: 1
+outputs:
+  - {name: base_sites, path: results/annotation/site.base.vcf.gz, media_type: application/gzip}
+  - {name: detailed_sites, path: results/annotation/site.detail.vcf.gz, media_type: application/gzip}
+  - {name: run, path: results/run.json, media_type: application/json}

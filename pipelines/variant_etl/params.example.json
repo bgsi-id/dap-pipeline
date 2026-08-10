@@ -1,0 +1,11 @@
+{
+  "dap_input_manifest": "/wes/inputs/resolved-inputs.json",
+  "dap_output_uri": "s3://example-workdir/variants/runs/hg001-hg002",
+  "release_id": "benchmark-v4.2.1",
+  "batch_id": "hg001-hg002",
+  "assembly": "GRCh38",
+  "annotation_pack": "grch38-v1",
+  "af_threshold": 0.01,
+  "reference_dir": "/reference",
+  "variant_image": "DEPLOYMENT_REGISTRY/bgsi/dap-variant:VERSION"
+}
