@@ -411,7 +411,7 @@ out.write_text(json.dumps({
     'assembly': '${params.assembly}',
     'annotation_pack': '${params.annotation_pack}',
     'af_threshold': ${params.af_threshold},
-}, indent=2, sort_keys=True) + '\n')
+}, indent=2, sort_keys=True))
 PY
     """
 }
