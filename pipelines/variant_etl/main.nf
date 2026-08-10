@@ -297,6 +297,7 @@ process ANNOTATE_DETAIL_VEP {
     input:
     path selected_vcf
     path selected_index
+    path selection_metrics
     path reference_ready
 
     output:
@@ -305,19 +306,25 @@ process ANNOTATE_DETAIL_VEP {
     script:
     """
     set -euo pipefail
-    vep \
-      --input_file '${selected_vcf}' \
-      --output_file site.detail.vcf.gz \
-      --vcf --compress_output bgzip --offline --cache \
-      --dir_cache '${params.vep_cache_dir}' \
-      --merged --cache_version '${params.vep_cache_version}' \
-      --assembly '${params.assembly}' \
-      --fasta '${params.reference_dir}/${params.fasta_name}' \
-      --mane --canonical --symbol --biotype --hgvs --hgvsg \
-      --shift_hgvs 1 --numbers --domains --protein --uniprot \
-      --flag_pick --pick_order mane_select,mane_plus_clinical,canonical,rank \
-      --fork ${task.cpus} --buffer_size ${params.vep_buffer_size} \
-      --no_stats --force_overwrite
+    selected_count=\$(sed -n 's/^selected_sites[[:space:]]*//p' '${selection_metrics}')
+    test -n "\${selected_count}"
+    if [ "\${selected_count}" -eq 0 ]; then
+      cp '${selected_vcf}' site.detail.vcf.gz
+    else
+      vep \
+        --input_file '${selected_vcf}' \
+        --output_file site.detail.vcf.gz \
+        --vcf --compress_output bgzip --offline --cache \
+        --dir_cache '${params.vep_cache_dir}' \
+        --merged --cache_version '${params.vep_cache_version}' \
+        --assembly '${params.assembly}' \
+        --fasta '${params.reference_dir}/${params.fasta_name}' \
+        --mane --canonical --symbol --biotype --hgvs --hgvsg \
+        --shift_hgvs 1 --numbers --domains --protein --uniprot \
+        --flag_pick --pick_order mane_select,mane_plus_clinical,canonical,rank \
+        --fork ${task.cpus} --buffer_size ${params.vep_buffer_size} \
+        --no_stats --force_overwrite
+    fi
     """
 }
 
@@ -469,7 +476,7 @@ workflow {
     af = ANNOTATE_AF(sites.vcf, references)
     base = ANNOTATE_LOCAL_CSQ(af.vcf, references)
     selected = SELECT_DETAIL_SITES(base.vcf, base.index)
-    vep = ANNOTATE_DETAIL_VEP(selected.vcf, selected.index, references)
+    vep = ANNOTATE_DETAIL_VEP(selected.vcf, selected.index, selected.metrics, references)
     detail = INDEX_DETAIL_VCF(vep.vcf)
     annotation_load = LOAD_ANNOTATIONS(base.vcf, detail.vcf)
     COLLECT_RESULTS(base.vcf, base.index, detail.vcf, detail.index,
