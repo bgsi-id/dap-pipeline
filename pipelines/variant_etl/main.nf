@@ -133,6 +133,7 @@ process INGEST_SAMPLE {
       --batch '${params.batch_id}' \
       --assembly '${params.assembly}' \
       --sample-id '${sample_id}' \
+      --allow-sample-id-mismatch \
       --run-id '${run_id}' \
       --rows-per-file ${params.rows_per_file}
     """
@@ -376,7 +377,7 @@ process LOAD_ANNOTATIONS {
 
 process COLLECT_RESULTS {
     tag "${params.batch_id}"
-    container params.python_image
+    container params.variant_image
     cpus 1
     memory '2 GB'
     publishDir params.dap_output_uri, mode: 'copy', overwrite: true, failOnError: true

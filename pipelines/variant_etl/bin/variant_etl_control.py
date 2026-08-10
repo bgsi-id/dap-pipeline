@@ -12,6 +12,7 @@ import gzip
 import json
 import re
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -226,6 +227,10 @@ ENGINE = ReplacingMergeTree(annotated_at) ORDER BY (annotation_pack,variant_id)"
 (variant_id String, annotation_pack String, completed_at DateTime DEFAULT now())
 ENGINE = ReplacingMergeTree(completed_at) ORDER BY (annotation_pack,variant_id)""",
     ]
+    detail_time = datetime.now(timezone.utc).replace(microsecond=0)
+    base_time = detail_time - timedelta(seconds=1)
+    base_version = base_time.strftime("%Y-%m-%d %H:%M:%S")
+    detail_version = detail_time.strftime("%Y-%m-%d %H:%M:%S")
 
     def base_rows():
         for variant_id, info, _ in vcf_rows(args.base_vcf):
@@ -246,20 +251,19 @@ ENGINE = ReplacingMergeTree(completed_at) ORDER BY (annotation_pack,variant_id)"
                 "hgnc": None, "vep_consequence": [], "clinvar_significance": [],
                 "clinvar_trait": [], "clinvar_scv": [], "cadd": None,
                 "vep_polyphen": None, "phylop": None, "gnomad_af": row["gnomad_af"],
+                "annotated_at": base_version,
             }
 
-    detail_cache = []
-    for variant_id, info, fields in vcf_rows(args.detail_vcf):
-        gene, consequences, polyphen, records = detail_values(info.get("CSQ"), fields)
-        detail_cache.append(
-            {
+    def detail_rows():
+        for variant_id, info, fields in vcf_rows(args.detail_vcf):
+            gene, consequences, polyphen, records = detail_values(info.get("CSQ"), fields)
+            yield {
                 "variant_id": variant_id, "annotation_pack": args.annotation_pack,
                 "hgnc": gene, "vep_consequence": consequences,
                 "vep_polyphen": polyphen,
                 "raw_csq": json.dumps(records, separators=(",", ":")),
                 "gnomad_af": nullable_float(info.get("gnomad_af")),
             }
-        )
 
     with httpx.Client(timeout=httpx.Timeout(600, connect=5), trust_env=False) as client:
         for statement in ddl:
@@ -270,7 +274,7 @@ ENGINE = ReplacingMergeTree(completed_at) ORDER BY (annotation_pack,variant_id)"
         send_json_rows(client, args.clickhouse_url, args.database, serving_table, serving_base_rows())
         detail_count = send_json_rows(
             client, args.clickhouse_url, args.database, detail_table,
-            ({key: value for key, value in row.items() if key != "gnomad_af"} for row in detail_cache),
+            ({key: value for key, value in row.items() if key != "gnomad_af"} for row in detail_rows()),
         )
         send_json_rows(
             client,
@@ -284,8 +288,9 @@ ENGINE = ReplacingMergeTree(completed_at) ORDER BY (annotation_pack,variant_id)"
                     "clinvar_significance": [], "clinvar_trait": [], "clinvar_scv": [],
                     "cadd": None, "vep_polyphen": row["vep_polyphen"], "phylop": None,
                     "gnomad_af": row["gnomad_af"],
+                    "annotated_at": detail_version,
                 }
-                for row in detail_cache
+                for row in detail_rows()
             ),
         )
         # Completion is committed last. Exporting novel sites anti-joins this
