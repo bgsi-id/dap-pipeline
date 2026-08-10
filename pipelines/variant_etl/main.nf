@@ -13,7 +13,6 @@ nextflow.enable.dsl = 2
 
 params.dap_input_manifest = null
 params.dap_output_uri = null
-params.variant_input_manifest = null
 params.output_dir = 'results'
 params.release_id = null
 params.batch_id = null
@@ -51,15 +50,10 @@ def sample_from_asset(def sample) {
     if (!sample.id || !assets.vcf || !assets.vcf_index) {
         error 'Each resolved sample requires id, vcf and vcf_index assets'
     }
-    if (!assets.vcf.sha256) {
-        error "Sample ${sample.id} VCF requires sha256 for retry identity"
-    }
     return [
         sample_id: sample.id.toString(),
         vcf_uri: assets.vcf.access_uri.toString(),
-        vcf_sha256: assets.vcf.sha256.toString().toLowerCase(),
         index_uri: assets.vcf_index.access_uri.toString(),
-        index_sha256: assets.vcf_index.sha256?.toString()?.toLowerCase() ?: '',
     ]
 }
 
@@ -87,6 +81,31 @@ process PRECHECK_REFERENCES {
 }
 
 
+process PREPARE_SAMPLE_INPUT {
+    tag "${sample_id}"
+    container params.bcftools_image
+    cpus 1
+    memory '2 GB'
+    time '2h'
+
+    input:
+    tuple val(sample_id), path(input_vcf), path(input_index)
+
+    output:
+    tuple val(sample_id), path('input.vcf.gz'), path('input.vcf.gz.tbi'), path('checksums.json')
+
+    script:
+    """
+    set -euo pipefail
+    cp '${input_vcf}' input.vcf.gz
+    cp '${input_index}' input.vcf.gz.tbi
+    vcf_sha256=\$(sha256sum input.vcf.gz | awk '{print \$1}')
+    index_sha256=\$(sha256sum input.vcf.gz.tbi | awk '{print \$1}')
+    printf '{"vcf_sha256":"%s","index_sha256":"%s"}\\n' "\${vcf_sha256}" "\${index_sha256}" > checksums.json
+    """
+}
+
+
 process INGEST_SAMPLE {
     tag "${sample_id}"
     container params.variant_image
@@ -105,9 +124,7 @@ process INGEST_SAMPLE {
     """
     set -euo pipefail
     echo '${vcf_sha256}  ${input_vcf}' | sha256sum -c -
-    if [[ -n '${index_sha256}' ]]; then
-      echo '${index_sha256}  ${input_index}' | sha256sum -c -
-    fi
+    echo '${index_sha256}  ${input_index}' | sha256sum -c -
 
     python -m variant_ingest \
       --input '${input_vcf}' \
@@ -400,9 +417,7 @@ PY
 
 
 workflow {
-    if (!params.dap_input_manifest && !params.variant_input_manifest) {
-        error 'dap_input_manifest or variant_input_manifest is required'
-    }
+    if (!params.dap_input_manifest) error 'dap_input_manifest is required'
     if (!params.dap_output_uri) error 'dap_output_uri is required'
     if (!params.variant_image) {
         error 'variant_image is required and must be injected by the deployment/runtime'
@@ -413,44 +428,11 @@ workflow {
     def threshold = params.af_threshold as double
     if (threshold < 0.0 || threshold > 1.0) error 'af_threshold must be between 0 and 1'
 
-    def records
-    if (params.variant_input_manifest) {
-        def source = new groovy.json.JsonSlurper().parse(file(params.variant_input_manifest).toFile())
-        if (source.schema != 'urn:bgsi:dap:variant-inputs:1' || !(source.samples instanceof List)) {
-            error 'variant_input_manifest must use urn:bgsi:dap:variant-inputs:1'
-        }
-        records = source.samples
-    } else {
-        def resolved = new groovy.json.JsonSlurper().parse(file(params.dap_input_manifest).toFile())
-        if (resolved.schema == 'urn:bgsi:dap:resolved-inputs:1') {
-            if (!(resolved.samples instanceof List)) {
-                error 'resolved-inputs v1 requires a samples list'
-            }
-            records = resolved.samples.collect { sample_from_asset(it) }
-        } else if (resolved.schema == 'urn:bgsi:dap:resolved-inputs:2') {
-            def assets = (resolved.release_assets ?: []).collectEntries { asset ->
-                [(asset.role?.toString()?.toLowerCase()): asset]
-            }
-            def inputAsset = assets.variant_input_manifest
-            if (!inputAsset?.access_uri) {
-                error 'resolved-inputs v2 requires the variant_input_manifest release asset'
-            }
-            def inputPath = file(inputAsset.access_uri.toString(), checkIfExists: true)
-            def reader = java.nio.file.Files.newBufferedReader(inputPath)
-            def source
-            try {
-                source = new groovy.json.JsonSlurper().parse(reader)
-            } finally {
-                reader.close()
-            }
-            if (source.schema != 'urn:bgsi:dap:variant-inputs:1' || !(source.samples instanceof List)) {
-                error 'variant_input_manifest asset must use urn:bgsi:dap:variant-inputs:1'
-            }
-            records = source.samples
-        } else {
-            error 'dap_input_manifest must use resolved-inputs v1 or v2'
-        }
+    def resolved = new groovy.json.JsonSlurper().parse(file(params.dap_input_manifest).toFile())
+    if (resolved.schema != 'urn:bgsi:dap:resolved-inputs:1' || !(resolved.samples instanceof List)) {
+        error 'dap_input_manifest must use resolved-inputs v1 with a samples list'
     }
+    def records = resolved.samples.collect { sample_from_asset(it) }
     if (!records) error 'No input samples were resolved'
 
     def sampleIds = records.collect { (it.sample_id ?: it.id)?.toString() }
@@ -460,20 +442,26 @@ workflow {
 
     sample_inputs = Channel.fromList(records).map { record ->
         def sampleId = safe_component(record.sample_id ?: record.id, 'sample_id')
-        def vcfUri = (record.vcf_uri ?: record.vcf?.access_uri)?.toString()
-        def indexUri = (record.index_uri ?: record.vcf_index?.access_uri)?.toString()
-        def sha = (record.vcf_sha256 ?: record.vcf?.sha256)?.toString()?.toLowerCase()
-        def indexSha = (record.index_sha256 ?: record.vcf_index?.sha256 ?: '').toString().toLowerCase()
-        if (!vcfUri || !indexUri || !(sha ==~ /[0-9a-f]{64}/)) {
-            error "Sample ${sampleId} requires VCF/index URIs and a lowercase SHA-256"
+        def vcfUri = record.vcf_uri?.toString()
+        def indexUri = record.index_uri?.toString()
+        if (!vcfUri || !indexUri) {
+            error "Sample ${sampleId} requires VCF and VCF index URIs"
+        }
+        tuple(sampleId, file(vcfUri, checkIfExists: true), file(indexUri, checkIfExists: true))
+    }
+    prepared_inputs = PREPARE_SAMPLE_INPUT(sample_inputs).map { sampleId, vcf, index, checksumFile ->
+        def checksums = new groovy.json.JsonSlurper().parse(checksumFile.toFile())
+        def sha = checksums.vcf_sha256?.toString()?.toLowerCase()
+        def indexSha = checksums.index_sha256?.toString()?.toLowerCase()
+        if (!(sha ==~ /[0-9a-f]{64}/) || !(indexSha ==~ /[0-9a-f]{64}/)) {
+            error "Sample ${sampleId} checksum preparation failed"
         }
         def runId = safe_component("${params.batch_id}-${sampleId}-${sha.take(16)}", 'run_id')
-        tuple(sampleId, file(vcfUri, checkIfExists: true), sha,
-              file(indexUri, checkIfExists: true), indexSha, runId)
+        tuple(sampleId, vcf, sha, index, indexSha, runId)
     }
 
     references = PRECHECK_REFERENCES()
-    ingested = INGEST_SAMPLE(sample_inputs)
+    ingested = INGEST_SAMPLE(prepared_inputs)
     loaded = LOAD_VARIANTS(ingested.parquet)
     load_barrier = loaded.receipt.collect()
     sites = EXPORT_NOVEL_SITES(load_barrier, references)

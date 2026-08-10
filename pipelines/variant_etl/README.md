@@ -18,9 +18,9 @@ account, IRSA role, work volume, reference volume or cloud credentials.
 - an execution identity that can stage governed inputs and publish only to the
   authorised output prefix.
 
-The deployment-specific `variant_image` is also mandatory at launch rather
-than being committed as a private registry address. The other tool images are
-public and pinned in `nextflow.config`.
+The deployment injects the trusted private `variant_image` and release ID. They
+are not user-visible workflow parameters. The other tool images are public and
+pinned in `nextflow.config`.
 
 No process invokes `aws s3`, lists a bucket or embeds a bucket name. nf-amazon
 stages VCF inputs and publishes Parquet/VCF outputs. ClickHouse reads an exact
@@ -28,7 +28,8 @@ published Parquet prefix using its own workload identity.
 
 ## Flow
 
-1. Verify each input SHA-256 and extract single-sample VCF facts to Parquet.
+1. Stage each governed VCF, calculate its SHA-256, verify that staged copy and
+   extract single-sample VCF facts to Parquet.
 2. Publish immutable, source-hash-addressed Parquet and load `variant_dim` and
    `variant_call` in ClickHouse.
 3. After the whole ingestion batch completes, export the union of sites that
@@ -52,33 +53,13 @@ sample calls and is a separate fact from this cohort site annotation.
 
 ## Inputs
 
-The normal dap-runtime input is `urn:bgsi:dap:resolved-inputs:2` with a governed
-release asset whose role is `variant_input_manifest`. That small manifest uses
-`urn:bgsi:dap:variant-inputs:1` and lists each sample's VCF/index URI and
-checksum. The older resolved-inputs v1 sample shape remains accepted for
-compatibility. A VCF SHA-256 is required and becomes part of its deterministic
-run ID. Therefore single, batch and megabatch are the same data contract with
-1, N or large-N `samples` entries.
+The normal dap-runtime input is `urn:bgsi:dap:resolved-inputs:1`: one or more
+governed samples, each with `vcf` and `vcf_index` assets. No catalog checksum is
+required for launch. Nextflow stages the assets, calculates their SHA-256 values
+and uses the VCF hash in the deterministic ingestion identity.
 
-For local development, `variant_input_manifest` may use:
-
-```json
-{
-  "schema": "urn:bgsi:dap:variant-inputs:1",
-  "samples": [
-    {
-      "sample_id": "HG001",
-      "vcf_uri": "/data/HG001.vcf.gz",
-      "vcf_sha256": "64-lowercase-hex-characters",
-      "index_uri": "/data/HG001.vcf.gz.tbi",
-      "index_sha256": "64-lowercase-hex-characters"
-    }
-  ]
-}
-```
-
-Example runtime parameters are in `params.example.json`. The runtime must add
-`variant_image` and its generated `dap_output_uri`.
+Example user-visible parameters are in `params.example.json`; dap-runtime adds
+the trusted image, resolved release ID and generated `dap_output_uri`.
 
 ## Retry semantics
 
