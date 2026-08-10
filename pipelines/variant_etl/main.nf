@@ -420,7 +420,6 @@ PY
 workflow {
     if (!params.dap_input_manifest) error 'dap_input_manifest is required'
     if (!params.dap_output_uri) error 'dap_output_uri is required'
-    params.dap_output_uri = params.dap_output_uri.toString().replaceFirst('/+$', '')
     if (!params.variant_image) {
         error 'variant_image is required and must be injected by the deployment/runtime'
     }

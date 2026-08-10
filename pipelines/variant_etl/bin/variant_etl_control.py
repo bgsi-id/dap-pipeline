@@ -19,6 +19,14 @@ from urllib.parse import urlparse
 import httpx
 
 
+def normalize_s3_uri(uri: str) -> str:
+    """Collapse duplicate path separators without altering ``s3://``."""
+    parsed = urlparse(uri)
+    if parsed.scheme != "s3" or not parsed.netloc:
+        raise ValueError("published manifest must be an s3:// URI")
+    return parsed._replace(path=re.sub(r"/{2,}", "/", parsed.path)).geturl()
+
+
 def sql(client: httpx.Client, url: str, database: str, statement: str) -> str:
     response = client.post(
         url, params={"database": database}, content=statement.encode("utf-8")
@@ -44,7 +52,9 @@ def load_variants(args: argparse.Namespace) -> None:
     if len(manifests) != 1:
         raise RuntimeError(f"expected one manifest below {root}, found {len(manifests)}")
     relative = manifests[0].relative_to(root).as_posix()
-    manifest_uri = f"{args.published_root.rstrip('/')}/{relative}"
+    manifest_uri = normalize_s3_uri(
+        f"{args.published_root.rstrip('/')}/{relative}"
+    )
 
     # Publishing is performed by nf-amazon. ClickHouse may observe the object
     # a few seconds after the process publish completes, so retry only this
