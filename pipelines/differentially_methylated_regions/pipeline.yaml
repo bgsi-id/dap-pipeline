@@ -35,6 +35,13 @@ parameters:
     required: false
     default: ""
     label: Covariate columns (comma-separated)
+  - name: profile_spar
+    type: number
+    required: false
+    default: 0.6
+    minimum: 0
+    maximum: 1
+    label: Regional profile smoothing
 data_input:
   file_inputs:
     - id: methylation_matrix
@@ -57,5 +64,6 @@ data_input:
 outputs:
   - {name: dmr_results, path: "results/*.dmr-results.tsv", media_type: text/tab-separated-values}
   - {name: cpg_results, path: "results/*.cpg-results.tsv", media_type: text/tab-separated-values}
-  - {name: top_regions_plot, path: "results/*.top-dmrs.png", media_type: image/png}
+  - {name: top_region_profile, path: "results/*.top-dmr-profile.tsv", media_type: text/tab-separated-values}
+  - {name: top_region_plot, path: "results/*.top-dmrs.png", media_type: image/png}
   - {name: provenance, path: "results/*.provenance.tsv", media_type: text/tab-separated-values}

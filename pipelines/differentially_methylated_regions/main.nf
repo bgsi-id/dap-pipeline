@@ -15,6 +15,7 @@ params.lambda = 1000
 params.bandwidth_scaling = 2
 params.min_cpgs = 2
 params.min_delta_beta = 0.0
+params.profile_spar = 0.6
 params.dmr_memory = '32 GB'
 
 process VALIDATE_DMR_INPUTS {
@@ -51,6 +52,7 @@ if (length(sample_ids) < 20) stop('DMR analysis requires at least 20 matched sam
 pheno <- pheno[match(sample_ids,pheno[[sid]]),,drop=FALSE]
 groups <- factor(pheno[[trait]])
 if (nlevels(groups) != 2) stop('DMR analysis requires exactly two phenotype groups')
+if (any(table(groups) < 3)) stop('DMR analysis requires at least three samples in each phenotype group')
 values <- as.matrix(beta[,sample_ids,drop=FALSE]); storage.mode(values) <- 'double'
 if (any(!is.finite(values),na.rm=TRUE) || any(values < 0 | values > 1,na.rm=TRUE)) stop('methylation values must be beta values in [0,1]')
 keep <- rowMeans(is.na(values)) <= 0.05 & beta\$probe_id %in% probes\$probe_id
@@ -112,11 +114,60 @@ write.table(data.frame(probe_id=rownames(beta),chrom=probes\$chrom,position=prob
 write.table(dmrs,file.path(out,'dmr-results.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
 metrics <- data.frame(metric=c('samples','cpgs_tested','cpgs_fdr','dmrs','group_reference','group_comparison'),value=c(ncol(beta),nrow(beta),sum(q<${params.fdr_threshold},na.rm=TRUE),nrow(dmrs),levels(groups)[1],levels(groups)[2]))
 write.table(metrics,file.path(out,'dmr-metrics.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
+
+# Methylartist-inspired summary for the highest-ranked DMR: show only the
+# normalized group profiles and uncertainty bands, never per-sample pileups.
+profile_columns <- c('chrom','position','group','mean_beta','ci_lower','ci_upper','smoothed_beta')
+profile <- data.frame(matrix(ncol=length(profile_columns),nrow=0,dimnames=list(NULL,profile_columns)))
 png(file.path(out,'top-dmrs.png'),width=1400,height=800,res=140)
 if (nrow(dmrs)) {
-  top <- head(dmrs,20); score <- -log10(pmax(top\$Stouffer,1e-300)); barplot(rev(score),names.arg=rev(paste0(top\$seqnames,':',top\$start,'-',top\$end)),horiz=TRUE,las=1,xlab='-log10(Stouffer p)',main='Top differentially methylated regions')
-} else plot.new()
+  top <- dmrs[1,,drop=FALSE]
+  chr_col <- intersect(c('seqnames','chr','chromosome'),names(top))[1]
+  start_col <- intersect(c('start','Start'),names(top))[1]
+  end_col <- intersect(c('end','End'),names(top))[1]
+  if (any(is.na(c(chr_col,start_col,end_col)))) stop('DMR output lacks chromosome, start, or end')
+  same_chr <- sub('^chr','',as.character(probes\$chrom),ignore.case=TRUE) == sub('^chr','',as.character(top[[chr_col]][1]),ignore.case=TRUE)
+  in_region <- same_chr & probes\$position >= as.integer(top[[start_col]][1]) & probes\$position <= as.integer(top[[end_col]][1])
+  indices <- which(in_region)
+  if (length(indices) < 2) stop('top DMR contains fewer than two plotted CpGs')
+  positions <- as.integer(probes\$position[indices]); ord <- order(positions); indices <- indices[ord]; positions <- positions[ord]
+  grid <- seq(min(positions),max(positions),length.out=max(200,length(unique(positions))))
+  colours <- c('#0072B2','#D55E00')
+  plotted <- list()
+  for (group_index in seq_along(levels(groups))) {
+    group_name <- levels(groups)[group_index]
+    group_values <- beta[indices,groups == group_name,drop=FALSE]
+    means <- rowMeans(group_values)
+    standard_error <- apply(group_values,1,sd) / sqrt(ncol(group_values))
+    standard_error[!is.finite(standard_error)] <- 0
+    lower <- pmax(0,means-1.96*standard_error); upper <- pmin(1,means+1.96*standard_error)
+    unique_positions <- sort(unique(positions))
+    collapse <- function(values) vapply(unique_positions,function(position) mean(values[positions == position]),numeric(1))
+    unique_means <- collapse(means); unique_lower <- collapse(lower); unique_upper <- collapse(upper)
+    smooth_values <- function(values) {
+      if (length(unique_positions) >= 4) predict(smooth.spline(unique_positions,values,spar=${params.profile_spar}),grid)\$y
+      else approx(unique_positions,values,xout=grid,rule=2)\$y
+    }
+    smooth_mean <- pmin(1,pmax(0,smooth_values(unique_means)))
+    smooth_lower <- pmin(smooth_mean,pmax(0,smooth_values(unique_lower)))
+    smooth_upper <- pmax(smooth_mean,pmin(1,smooth_values(unique_upper)))
+    plotted[[group_index]] <- list(name=group_name,n=ncol(group_values),mean=smooth_mean,lower=smooth_lower,upper=smooth_upper)
+    profile <- rbind(profile,data.frame(chrom=as.character(top[[chr_col]][1]),position=grid,group=group_name,mean_beta=approx(unique_positions,unique_means,xout=grid,rule=2)\$y,ci_lower=smooth_lower,ci_upper=smooth_upper,smoothed_beta=smooth_mean))
+  }
+  plot(grid,plotted[[1]]\$mean,type='n',ylim=c(0,1),xlab=paste0(as.character(top[[chr_col]][1]),' genomic position (GRCh38)'),ylab='Mean methylation fraction',main='Top DMR: normalized group profiles',las=1)
+  graphics::grid(col='#E5E5E5',lty=1)
+  for (group_index in seq_along(plotted)) {
+    item <- plotted[[group_index]]; colour <- colours[group_index]
+    polygon(c(grid,rev(grid)),c(item\$lower,rev(item\$upper)),col=adjustcolor(colour,alpha.f=0.18),border=NA)
+    lines(grid,item\$mean,col=colour,lwd=3)
+  }
+  legend('topright',legend=vapply(plotted,function(item) paste0(item\$name,' (n=',item\$n,')'),character(1)),col=colours[seq_along(plotted)],lwd=3,bty='n')
+  mtext('Lines are group means smoothed across CpGs; bands are approximate 95% confidence intervals.',side=1,line=4,cex=.8)
+} else {
+  plot.new(); text(.5,.55,'No DMR passed the configured thresholds',cex=1.2); text(.5,.45,'No regional methylation profile is available',cex=.9,col='#666666')
+}
 dev.off()
+write.table(profile,file.path(out,'top-dmr-profile.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
 RS
     """
 
@@ -126,6 +177,7 @@ RS
     printf 'probe_id\tchrom\tposition\tdelta_beta\tt\tp_value\tfdr\n' > dmr/cpg-results.tsv
     printf 'seqnames\tstart\tend\n' > dmr/dmr-results.tsv
     printf 'metric\tvalue\ndmrs\t0\n' > dmr/dmr-metrics.tsv
+    printf 'chrom\tposition\tgroup\tmean_beta\tci_lower\tci_upper\tsmoothed_beta\n' > dmr/top-dmr-profile.tsv
     touch dmr/top-dmrs.png
     """
 }
@@ -149,6 +201,7 @@ process COLLECT_RESULTS {
     cp dmr/cpg-results.tsv results/${params.cohort_id}.cpg-results.tsv
     cp dmr/dmr-results.tsv results/${params.cohort_id}.dmr-results.tsv
     cp dmr/dmr-metrics.tsv results/${params.cohort_id}.dmr-metrics.tsv
+    cp dmr/top-dmr-profile.tsv results/${params.cohort_id}.top-dmr-profile.tsv
     cp dmr/top-dmrs.png results/${params.cohort_id}.top-dmrs.png
     cp validated/validation-metrics.tsv results/${params.cohort_id}.validation-metrics.tsv
     printf 'method\tDMRcate kernel smoothing over limma moderated CpG tests\nphenotype\t%s\nreference_genome\tGRCh38\nnot_clinical_use\ttrue\n' '${params.phenotype_column}' > results/${params.cohort_id}.provenance.tsv
@@ -158,6 +211,7 @@ process COLLECT_RESULTS {
 workflow {
     if (!params.methylation_matrix_uri || !params.phenotype_uri || !params.probe_manifest_uri || !params.phenotype_column || !params.cohort_id) error 'methylation matrix, phenotype, probe manifest, phenotype column, and cohort_id are required'
     if (!(params.cohort_id ==~ /[A-Za-z0-9][A-Za-z0-9._-]{0,127}/)) error 'invalid cohort_id'
+    if ((params.profile_spar as BigDecimal) < 0 || (params.profile_spar as BigDecimal) > 1) error 'profile_spar must be between 0 and 1'
     matrix=channel.fromPath(params.methylation_matrix_uri,checkIfExists:true)
     phenotypes=channel.fromPath(params.phenotype_uri,checkIfExists:true)
     manifest=channel.fromPath(params.probe_manifest_uri,checkIfExists:true)
