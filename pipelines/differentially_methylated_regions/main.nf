@@ -34,7 +34,7 @@ def sample_methylation_record(def sample, int index) {
         error 'Each resolved sample requires id and control/patient cohort membership'
     }
     def candidates = (sample.assets ?: []).findAll {
-        it.role?.toString()?.toLowerCase() == 'methylation'
+        it.role?.toString()?.toLowerCase() == 'bedmethyl'
     }
     def suffixes = [
         hp1: '.wf_mods.1.bedmethyl.gz',
@@ -44,7 +44,10 @@ def sample_methylation_record(def sample, int index) {
     def selected = suffixes.collectEntries { partition, suffix ->
         def matches = candidates.findAll { it.name?.toString()?.endsWith(suffix) }
         if (matches.size() != 1) {
-            error "Sample ${sample.id} requires exactly one methylation asset ending ${suffix}"
+            def received = (sample.assets ?: []).collect {
+                "${it.role ?: '<missing-role>'}:${it.name ?: '<missing-name>'}"
+            }.join(', ')
+            error "Sample ${sample.id} requires exactly one bedmethyl asset ending ${suffix}; received [${received}]"
         }
         [(partition): matches.first()]
     }
