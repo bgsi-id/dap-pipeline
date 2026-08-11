@@ -3,38 +3,57 @@ id: differentially-methylated-regions
 name: Differentially methylated region analysis
 version: dev
 description: >-
-  Validate beta values and sample metadata, fit moderated CpG-level models,
-  and call kernel-smoothed differentially methylated regions with DMRcate.
+  Compare two governed cohort packs using per-sample modkit bedMethyl assets.
+  Produce a primary all-read analysis plus HP1, HP2 and ungrouped sensitivity
+  analyses with normalized cohort methylation profiles.
 engine: nextflow
 engine_version: 26.04.6
 workflow_type: NFL
 workflow_type_version: DSL2
 entrypoint: main.nf
-tags: [nextflow, methylation, dmr, development, limma, dmrcate]
-estimate: "10-40 CPU·h for array-scale methylation data"
+tags: [nextflow, nanopore, methylation, bedmethyl, dmr, development, limma, dmrcate]
+estimate: "Input-dependent; bedMethyl normalization scales horizontally by sample"
 token_estimate: 20
 execution:
   preferred_location: alor
   resource_profile: standard
+data_input:
+  contract: dap-pack-manifest/v2
+  accepted_pack_kinds: [cohort]
+  named_packs: [control, patient]
+  required_assets:
+    - role: methylation
+      scope: sample
+      required: true
 parameters:
   - name: cohort_id
     type: string
     required: true
     label: Analysis identifier
-  - name: phenotype_column
-    type: string
-    required: true
-    label: Grouping phenotype column
-  - name: sample_id_column
+  - name: mod_code
     type: string
     required: false
-    default: sample_id
-    label: Sample ID column
-  - name: covariate_columns
-    type: string
+    default: m
+    label: Modified-base code
+  - name: min_coverage
+    type: integer
     required: false
-    default: ""
-    label: Covariate columns (comma-separated)
+    default: 5
+    minimum: 1
+    label: Minimum valid coverage per CpG and sample
+  - name: min_sample_fraction
+    type: number
+    required: false
+    default: 0.8
+    minimum: 0.01
+    maximum: 1
+    label: Minimum covered fraction in each cohort
+  - name: min_samples_per_cohort
+    type: integer
+    required: false
+    default: 3
+    minimum: 3
+    label: Minimum samples in each cohort
   - name: profile_spar
     type: number
     required: false
@@ -42,28 +61,13 @@ parameters:
     minimum: 0
     maximum: 1
     label: Regional profile smoothing
-data_input:
-  file_inputs:
-    - id: methylation_matrix
-      label: Methylation matrix
-      description: Sample-keyed beta-value matrix for development testing.
-      required: true
-      extensions: [.tsv, .csv]
-      parameter: methylation_matrix_uri
-    - id: phenotypes
-      label: Phenotypes and covariates
-      required: true
-      extensions: [.tsv, .csv]
-      parameter: phenotype_uri
-    - id: probe_manifest
-      label: Probe coordinates
-      description: Table with probe_id, chrom, and GRCh38 position columns.
-      required: true
-      extensions: [.tsv, .csv]
-      parameter: probe_manifest_uri
 outputs:
-  - {name: dmr_results, path: "results/*.dmr-results.tsv", media_type: text/tab-separated-values}
-  - {name: cpg_results, path: "results/*.cpg-results.tsv", media_type: text/tab-separated-values}
-  - {name: top_region_profile, path: "results/*.top-dmr-profile.tsv", media_type: text/tab-separated-values}
-  - {name: top_region_plot, path: "results/*.top-dmrs.png", media_type: image/png}
-  - {name: provenance, path: "results/*.provenance.tsv", media_type: text/tab-separated-values}
+  - {name: combined_dmrs, path: "results/combined/dmr-results.tsv", media_type: text/tab-separated-values}
+  - {name: combined_profile, path: "results/combined/top-dmr-profile.png", media_type: image/png}
+  - {name: hp1_dmrs, path: "results/hp1/dmr-results.tsv", media_type: text/tab-separated-values}
+  - {name: hp1_profile, path: "results/hp1/top-dmr-profile.png", media_type: image/png}
+  - {name: hp2_dmrs, path: "results/hp2/dmr-results.tsv", media_type: text/tab-separated-values}
+  - {name: hp2_profile, path: "results/hp2/top-dmr-profile.png", media_type: image/png}
+  - {name: ungrouped_dmrs, path: "results/ungrouped/dmr-results.tsv", media_type: text/tab-separated-values}
+  - {name: ungrouped_profile, path: "results/ungrouped/top-dmr-profile.png", media_type: image/png}
+  - {name: matrix_qc, path: "results/*.matrix-metrics.tsv", media_type: text/tab-separated-values}
