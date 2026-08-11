@@ -1,0 +1,49 @@
+schema_version: "1.0"
+id: hail-binary-gwas
+name: GWAS (Hail) — binary traits
+version: dev
+description: >-
+  Development skeleton for case/control association with Hail. It defines the
+  governed input and phenotype contract but does not yet perform analysis.
+engine: nextflow
+engine_version: 26.04.6
+workflow_type: NFL
+workflow_type_version: DSL2
+entrypoint: main.nf
+tags: [nextflow, hail, gwas, binary-trait, development]
+estimate: Not estimated
+token_estimate: 0
+execution:
+  preferred_location: alor
+  resource_profile: standard
+inputs:
+  - role: genotypes
+    parameter: genotype_uri
+    required: true
+  - role: phenotypes
+    parameter: phenotype_uri
+    required: true
+parameters:
+  - name: phenotype_column
+    type: string
+    required: true
+    label: Case/control phenotype column
+  - name: sample_id_column
+    type: string
+    required: false
+    default: s
+    label: Sample ID column
+  - name: case_value
+    type: string
+    required: false
+    default: "1"
+    label: Case value
+  - name: control_value
+    type: string
+    required: false
+    default: "0"
+    label: Control value
+outputs:
+  - name: development_notice
+    path: development-notice.txt
+    media_type: text/plain

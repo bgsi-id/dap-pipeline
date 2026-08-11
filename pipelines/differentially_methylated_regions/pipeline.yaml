@@ -1,0 +1,35 @@
+schema_version: "1.0"
+id: differentially-methylated-regions
+name: Differentially methylated region analysis
+version: dev
+description: >-
+  Development skeleton for identifying regions with differential methylation
+  between phenotype groups. It does not yet perform preprocessing or DMR calling.
+engine: nextflow
+engine_version: 26.04.6
+workflow_type: NFL
+workflow_type_version: DSL2
+entrypoint: main.nf
+tags: [nextflow, methylation, dmr, development]
+estimate: Not estimated
+token_estimate: 0
+execution:
+  preferred_location: alor
+  resource_profile: standard
+parameters:
+  - name: phenotype_column
+    type: string
+    required: true
+    label: Grouping phenotype column
+data_input:
+  file_inputs:
+    - id: methylation_matrix
+      label: Methylation matrix
+      description: Sample-keyed beta or M-value matrix for development testing.
+      required: true
+      extensions: [.tsv, .csv]
+      parameter: methylation_matrix_uri
+outputs:
+  - name: development_notice
+    path: development-notice.txt
+    media_type: text/plain

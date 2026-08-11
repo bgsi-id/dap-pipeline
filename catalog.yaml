@@ -4,17 +4,25 @@ pipelines:
     path: pipelines/clinical_annotation
     descriptor: pipelines/clinical_annotation/pipeline.yaml
     active: true
-  - id: nextflow-data-smoke
-    path: pipelines/sample-vcf-smoke
-    descriptor: pipelines/sample-vcf-smoke/pipeline.yaml
+  - id: cohort-summary
+    path: pipelines/cohort_summary
+    descriptor: pipelines/cohort_summary/pipeline.yaml
     active: true
   - id: hail-cohort-gwas
     path: pipelines/hail_gwas
     descriptor: pipelines/hail_gwas/pipeline.yaml
     active: true
+  - id: hail-binary-gwas
+    path: pipelines/hail_binary_gwas
+    descriptor: pipelines/hail_binary_gwas/pipeline.yaml
+    active: true
   - id: plink-case-control-gwas
     path: pipelines/plink_gwas
     descriptor: pipelines/plink_gwas/pipeline.yaml
+    active: true
+  - id: plink-quantitative-gwas
+    path: pipelines/plink_quantitative_gwas
+    descriptor: pipelines/plink_quantitative_gwas/pipeline.yaml
     active: true
   - id: hail-cohort-prs
     path: pipelines/hail_prs
@@ -23,4 +31,12 @@ pipelines:
   - id: variant-etl
     path: pipelines/variant_etl
     descriptor: pipelines/variant_etl/pipeline.yaml
+    active: true
+  - id: genetic-ancestry-projection
+    path: pipelines/genetic_ancestry_projection
+    descriptor: pipelines/genetic_ancestry_projection/pipeline.yaml
+    active: true
+  - id: differentially-methylated-regions
+    path: pipelines/differentially_methylated_regions
+    descriptor: pipelines/differentially_methylated_regions/pipeline.yaml
     active: true

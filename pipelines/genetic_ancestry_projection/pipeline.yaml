@@ -1,0 +1,32 @@
+schema_version: "1.0"
+id: genetic-ancestry-projection
+name: Genetic ancestry projection (1KGP)
+version: dev
+description: >-
+  Development skeleton for projecting cohort genotypes onto a fixed 1000
+  Genomes reference PC space. It does not yet perform projection or assignment.
+engine: nextflow
+engine_version: 26.04.6
+workflow_type: NFL
+workflow_type_version: DSL2
+entrypoint: main.nf
+tags: [nextflow, ancestry, 1000-genomes, development]
+estimate: Not estimated
+token_estimate: 0
+execution:
+  preferred_location: alor
+  resource_profile: standard
+inputs:
+  - role: genotypes
+    parameter: genotype_uri
+    required: true
+parameters:
+  - name: reference_panel
+    type: string
+    required: true
+    default: 1000-genomes-grch38
+    label: Reference panel
+outputs:
+  - name: development_notice
+    path: development-notice.txt
+    media_type: text/plain

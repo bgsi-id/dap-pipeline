@@ -1,11 +1,10 @@
 schema_version: "1.0"
 id: plink-case-control-gwas
-name: Case/control GWAS (PLINK2)
+name: GWAS (PLINK2) — binary traits
 version: 0.1.0
 description: >-
-  Convert a shared pVCF to PLINK triples, run Cloudfield-style pre-GWAS QC,
-  PCA and KING pruning, then Firth logistic association and GWAS plots from
-  two immutable cohort packs.
+  Compare case and control cohort packs after QC, PCA and KING pruning, then
+  run Firth logistic association with PLINK2 and generate GWAS plots.
 engine: nextflow
 engine_version: 26.04.6
 workflow_type: NFL

@@ -1,10 +1,10 @@
 schema_version: "1.0"
 id: hail-cohort-gwas
-name: Cohort GWAS (Hail)
+name: GWAS (Hail) — quantitative traits
 version: 0.1.0
 description: >-
-  QC a cohort's genotypes, derive ancestry principal components, and run a
-  single-phenotype association scan with Manhattan and QQ plots.
+  QC cohort genotypes, derive ancestry principal components, and test one
+  quantitative phenotype with linear association, Manhattan and QQ plots.
 engine: nextflow
 engine_version: 26.04.6
 workflow_type: NFL
@@ -95,7 +95,7 @@ parameters:
     type: enum
     required: true
     default: quantitative
-    values: [quantitative, binary]
+    values: [quantitative]
     label: Phenotype type
   - name: covariate_columns
     type: string

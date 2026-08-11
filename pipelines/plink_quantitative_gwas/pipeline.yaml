@@ -1,0 +1,39 @@
+schema_version: "1.0"
+id: plink-quantitative-gwas
+name: GWAS (PLINK2) — quantitative traits
+version: dev
+description: >-
+  Development skeleton for quantitative-trait association with PLINK2. It
+  defines the governed input and phenotype contract but does not yet perform analysis.
+engine: nextflow
+engine_version: 26.04.6
+workflow_type: NFL
+workflow_type_version: DSL2
+entrypoint: main.nf
+tags: [nextflow, plink2, gwas, quantitative-trait, development]
+estimate: Not estimated
+token_estimate: 0
+execution:
+  preferred_location: alor
+  resource_profile: standard
+inputs:
+  - role: genotypes
+    parameter: genotype_uri
+    required: true
+  - role: phenotypes
+    parameter: phenotype_uri
+    required: true
+parameters:
+  - name: phenotype_column
+    type: string
+    required: true
+    label: Quantitative phenotype column
+  - name: sample_id_column
+    type: string
+    required: false
+    default: IID
+    label: Sample ID column
+outputs:
+  - name: development_notice
+    path: development-notice.txt
+    media_type: text/plain

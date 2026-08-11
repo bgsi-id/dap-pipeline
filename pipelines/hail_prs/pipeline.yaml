@@ -1,6 +1,6 @@
 schema_version: "1.0"
 id: hail-cohort-prs
-name: Cohort polygenic score (Hail)
+name: Polygenic score calculation
 version: 0.1.0
 description: >-
   Apply a PGS Catalog scoring file to a cohort, measure how much of the score

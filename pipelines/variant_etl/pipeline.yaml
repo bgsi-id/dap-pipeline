@@ -1,6 +1,6 @@
 schema_version: "1.0"
 id: variant-etl
-name: Variant ETL
+name: Variant ingestion and annotation
 version: 0.2.6
 description: >-
   Extract one or many governed single-sample VCFs into Parquet and ClickHouse,
