@@ -1,9 +1,5 @@
 schema_version: "1.0"
 pipelines:
-  - id: clinical-annotation
-    path: pipelines/clinical_annotation
-    descriptor: pipelines/clinical_annotation/pipeline.yaml
-    active: true
   - id: cohort-summary
     path: pipelines/cohort_summary
     descriptor: pipelines/cohort_summary/pipeline.yaml
