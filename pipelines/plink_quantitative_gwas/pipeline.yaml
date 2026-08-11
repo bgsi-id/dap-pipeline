@@ -3,16 +3,16 @@ id: plink-quantitative-gwas
 name: GWAS (PLINK2) — quantitative traits
 version: dev
 description: >-
-  Development skeleton for quantitative-trait association with PLINK2. It
-  defines the governed input and phenotype contract but does not yet perform analysis.
+  Validate a numeric phenotype, perform genotype and sample QC, remove close
+  relatives, derive ancestry PCs, and run linear association with PLINK2.
 engine: nextflow
 engine_version: 26.04.6
 workflow_type: NFL
 workflow_type_version: DSL2
 entrypoint: main.nf
-tags: [nextflow, plink2, gwas, quantitative-trait, development]
-estimate: Not estimated
-token_estimate: 0
+tags: [nextflow, plink2, gwas, quantitative-trait, development, qc]
+estimate: "20-80 CPU·h for 500-2000 samples"
+token_estimate: 40
 execution:
   preferred_location: alor
   resource_profile: standard
@@ -23,7 +23,20 @@ inputs:
   - role: phenotypes
     parameter: phenotype_uri
     required: true
+  - role: bgen_sample
+    parameter: bgen_sample_uri
+    required: false
 parameters:
+  - name: cohort_id
+    type: string
+    required: true
+    label: Analysis identifier
+  - name: genotype_format
+    type: enum
+    required: true
+    default: vcf
+    values: [vcf, bgen]
+    label: Genotype format
   - name: phenotype_column
     type: string
     required: true
@@ -34,6 +47,7 @@ parameters:
     default: IID
     label: Sample ID column
 outputs:
-  - name: development_notice
-    path: development-notice.txt
-    media_type: text/plain
+  - {name: summary_statistics, path: "results/*.sumstats.tsv", media_type: text/tab-separated-values}
+  - {name: top_hits, path: "results/*.top-hits.tsv", media_type: text/tab-separated-values}
+  - {name: principal_components, path: "results/*.pcs.tsv", media_type: text/tab-separated-values}
+  - {name: provenance, path: "results/*.provenance.tsv", media_type: text/tab-separated-values}

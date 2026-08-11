@@ -9,7 +9,7 @@ engine: nextflow
 engine_version: 26.04.6
 workflow_type: NFL
 workflow_type_version: DSL2
-entrypoint: main.nf
+entrypoint: quantitative.nf
 tags:
   - nextflow
   - hail
@@ -60,10 +60,6 @@ outputs:
     path: results/*.provenance.txt
     media_type: text/plain
 
-# PROPOSED SCHEMA EXTENSION — not yet consumed by svc-auth or svc-data.
-# The submission form on the svc-auth jobs page has nothing to render without
-# it: `inputs` only describes roles that resolve to DRS objects, and every
-# field below is a user decision that no resolver can supply.
 parameters:
   - name: cohort_id
     type: string

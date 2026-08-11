@@ -1,5 +1,7 @@
 nextflow.enable.dsl = 2
 
+include { WRITE_RESULTS } from '../base_nf/modules/bundle'
+
 /*
  * Cohort GWAS (Hail)
  *
@@ -9,44 +11,6 @@ nextflow.enable.dsl = 2
  * single container. Every stage emits keyed metrics and terminates rather than
  * publishing an association result derived from an unusable cohort.
  */
-
-params.genotype_uri = null
-params.genotype_format = 'mt'
-params.genotype_sha256 = ''
-params.bgen_sample_uri = ''
-params.phenotype_uri = null
-params.phenotype_sha256 = ''
-
-params.cohort_id = null
-params.output_dir = 'results'
-params.reference_genome = 'GRCh38'
-
-params.sample_id_column = 's'
-params.phenotype_column = null
-params.phenotype_type = 'quantitative'
-params.covariate_columns = ''
-
-params.min_gq = 20
-params.min_dp = 10
-params.min_call_rate_variant = 0.95
-params.min_call_rate_sample = 0.95
-params.min_maf = 0.01
-params.min_hwe_p = 1e-6
-
-params.n_pcs = 10
-params.ld_prune = true
-params.ld_prune_r2 = 0.2
-params.ld_prune_window = 500000
-params.pca_max_variants = 200000
-
-params.min_samples_retained = 100
-params.min_variants_retained = 10000
-params.min_lambda_gc = 0.8
-params.max_lambda_gc = 1.2
-
-params.hail_image = 'hailgenetics/hail:0.2.133'
-params.hail_driver_memory = '24g'
-
 
 process IMPORT_GENOTYPES {
     tag "${cohort_id}"
@@ -649,8 +613,6 @@ process COLLECT_RESULTS {
     memory '2 GB'
     time '30m'
 
-    publishDir params.output_dir, mode: 'copy', overwrite: false
-
     input:
     path sumstats
     path top_hits
@@ -667,7 +629,7 @@ process COLLECT_RESULTS {
     val cohort_id
 
     output:
-    path 'results/*', emit: files
+    path 'results', emit: results
 
     script:
     """
@@ -690,7 +652,10 @@ process COLLECT_RESULTS {
 }
 
 
-workflow {
+workflow HAIL_GWAS_CORE {
+    if (!params.dap_output_uri) {
+        error 'dap_output_uri is required'
+    }
     if (!params.genotype_uri) {
         error 'genotype_uri is required'
     }
@@ -808,4 +773,6 @@ workflow {
         RUN_ASSOCIATION.out.metrics,
         cohort_id,
     )
+
+    WRITE_RESULTS(COLLECT_RESULTS.out.results)
 }

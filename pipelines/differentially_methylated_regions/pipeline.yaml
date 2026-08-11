@@ -3,33 +3,59 @@ id: differentially-methylated-regions
 name: Differentially methylated region analysis
 version: dev
 description: >-
-  Development skeleton for identifying regions with differential methylation
-  between phenotype groups. It does not yet perform preprocessing or DMR calling.
+  Validate beta values and sample metadata, fit moderated CpG-level models,
+  and call kernel-smoothed differentially methylated regions with DMRcate.
 engine: nextflow
 engine_version: 26.04.6
 workflow_type: NFL
 workflow_type_version: DSL2
 entrypoint: main.nf
-tags: [nextflow, methylation, dmr, development]
-estimate: Not estimated
-token_estimate: 0
+tags: [nextflow, methylation, dmr, development, limma, dmrcate]
+estimate: "10-40 CPU·h for array-scale methylation data"
+token_estimate: 20
 execution:
   preferred_location: alor
   resource_profile: standard
 parameters:
+  - name: cohort_id
+    type: string
+    required: true
+    label: Analysis identifier
   - name: phenotype_column
     type: string
     required: true
     label: Grouping phenotype column
+  - name: sample_id_column
+    type: string
+    required: false
+    default: sample_id
+    label: Sample ID column
+  - name: covariate_columns
+    type: string
+    required: false
+    default: ""
+    label: Covariate columns (comma-separated)
 data_input:
   file_inputs:
     - id: methylation_matrix
       label: Methylation matrix
-      description: Sample-keyed beta or M-value matrix for development testing.
+      description: Sample-keyed beta-value matrix for development testing.
       required: true
       extensions: [.tsv, .csv]
       parameter: methylation_matrix_uri
+    - id: phenotypes
+      label: Phenotypes and covariates
+      required: true
+      extensions: [.tsv, .csv]
+      parameter: phenotype_uri
+    - id: probe_manifest
+      label: Probe coordinates
+      description: Table with probe_id, chrom, and GRCh38 position columns.
+      required: true
+      extensions: [.tsv, .csv]
+      parameter: probe_manifest_uri
 outputs:
-  - name: development_notice
-    path: development-notice.txt
-    media_type: text/plain
+  - {name: dmr_results, path: "results/*.dmr-results.tsv", media_type: text/tab-separated-values}
+  - {name: cpg_results, path: "results/*.cpg-results.tsv", media_type: text/tab-separated-values}
+  - {name: top_regions_plot, path: "results/*.top-dmrs.png", media_type: image/png}
+  - {name: provenance, path: "results/*.provenance.tsv", media_type: text/tab-separated-values}

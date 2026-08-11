@@ -3,16 +3,16 @@ id: hail-binary-gwas
 name: GWAS (Hail) — binary traits
 version: dev
 description: >-
-  Development skeleton for case/control association with Hail. It defines the
-  governed input and phenotype contract but does not yet perform analysis.
+  QC cohort genotypes, derive ancestry principal components, validate a 0/1
+  phenotype, and run logistic association with Manhattan and QQ plots.
 engine: nextflow
 engine_version: 26.04.6
 workflow_type: NFL
 workflow_type_version: DSL2
 entrypoint: main.nf
-tags: [nextflow, hail, gwas, binary-trait, development]
-estimate: Not estimated
-token_estimate: 0
+tags: [nextflow, hail, gwas, binary-trait, development, qc]
+estimate: "20-80 CPU·h for 500-2000 samples"
+token_estimate: 40
 execution:
   preferred_location: alor
   resource_profile: standard
@@ -33,17 +33,41 @@ parameters:
     required: false
     default: s
     label: Sample ID column
-  - name: case_value
+  - name: genotype_format
+    type: enum
+    required: true
+    default: mt
+    values: [mt, vcf, bgen]
+    label: Genotype format
+  - name: reference_genome
+    type: enum
+    required: true
+    default: GRCh38
+    values: [GRCh37, GRCh38]
+    label: Reference genome
+  - name: cohort_id
+    type: string
+    required: true
+    label: Cohort identifier
+  - name: covariate_columns
     type: string
     required: false
-    default: "1"
-    label: Case value
-  - name: control_value
-    type: string
+    default: ""
+    label: Covariate columns (comma-separated)
+  - name: n_pcs
+    type: integer
     required: false
-    default: "0"
-    label: Control value
+    default: 10
+    label: Principal components used as covariates
+  - name: min_maf
+    type: number
+    required: false
+    default: 0.01
+    label: Minimum minor allele frequency
 outputs:
-  - name: development_notice
-    path: development-notice.txt
-    media_type: text/plain
+  - {name: sumstats, path: "results/*.sumstats.tsv", media_type: text/tab-separated-values}
+  - {name: top_hits, path: "results/*.top-hits.tsv", media_type: text/tab-separated-values}
+  - {name: manhattan, path: "results/*.manhattan.html", media_type: text/html}
+  - {name: qq, path: "results/*.qq.html", media_type: text/html}
+  - {name: principal_components, path: "results/*.pcs.tsv", media_type: text/tab-separated-values}
+  - {name: provenance, path: "results/*.provenance.txt", media_type: text/plain}
