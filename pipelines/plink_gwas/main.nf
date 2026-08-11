@@ -190,21 +190,87 @@ with source.open() as handle:
         try: p = float(row['P'])
         except (ValueError, KeyError): continue
         if 0 < p <= 1: rows.append((row, p))
-rows.sort(key=lambda item: item[1])
+p_ranked = sorted(rows, key=lambda item: item[1])
 with (out / f'{prefix}.top-hits.tsv').open('w') as handle:
-    writer = csv.DictWriter(handle, fieldnames=list(rows[0][0]) if rows else ['ID','P'], delimiter='\t')
-    writer.writeheader(); writer.writerows(row for row, _ in rows[:100])
-summary = {'tested_variants': len(rows), 'top_hit': rows[0][0] if rows else None}
+    writer = csv.DictWriter(handle, fieldnames=list(p_ranked[0][0]) if p_ranked else ['ID','P'], delimiter='\t')
+    writer.writeheader(); writer.writerows(row for row, _ in p_ranked[:100])
+summary = {'tested_variants': len(rows), 'top_hit': p_ranked[0][0] if p_ranked else None}
 (out / f'{prefix}.summary.json').write_text(json.dumps(summary, indent=2, sort_keys=True))
 try:
     import matplotlib.pyplot as plt
-    chrom = [str(row.get('#CHROM') or row.get('CHROM') or '') for row, _ in rows]
-    y = [-math.log10(p) for _, p in rows]
-    x = list(range(len(rows)))
-    plt.figure(figsize=(16, 7)); plt.scatter(x, y, c=[hash(c) % 2 for c in chrom], s=2, cmap='coolwarm'); plt.xlabel('Variant'); plt.ylabel('-log10(P)'); plt.title('Manhattan plot'); plt.tight_layout(); plt.savefig(out / f'{prefix}.manhattan.png', dpi=180); plt.close()
-    expected = [-math.log10((i + .5) / len(rows)) for i in range(len(rows))]
-    observed = sorted(y)
-    plt.figure(figsize=(7, 7)); plt.scatter(expected, observed, s=3); plt.plot([0, max(expected, default=1)], [0, max(expected, default=1)], 'r-'); plt.xlabel('Expected -log10(P)'); plt.ylabel('Observed -log10(P)'); plt.title('QQ plot'); plt.tight_layout(); plt.savefig(out / f'{prefix}.qq.png', dpi=180); plt.close()
+
+    def chromosome_label(value):
+        label = str(value)
+        return label[3:] if label.lower().startswith('chr') else label
+
+    def chromosome_key(value):
+        label = chromosome_label(value).upper()
+        aliases = {'X': 23, 'Y': 24, 'XY': 25, 'M': 26, 'MT': 26}
+        try:
+            number = int(label)
+            return (number if number > 0 else 10_000, label)
+        except ValueError:
+            return (aliases.get(label, 10_000), label)
+
+    genomic_rows = []
+    for row, p in rows:
+        chromosome = str(row.get('#CHROM') or row.get('CHROM') or '').strip()
+        try:
+            position = int(row.get('POS', ''))
+        except (TypeError, ValueError):
+            continue
+        if chromosome and position >= 0:
+            genomic_rows.append((chromosome_key(chromosome), chromosome, position, p))
+    genomic_rows.sort(key=lambda item: (item[0], item[2]))
+
+    if genomic_rows:
+        chromosome_max = {}
+        chromosome_labels = {}
+        for key, label, position, _ in genomic_rows:
+            chromosome_max[key] = max(chromosome_max.get(key, 0), position)
+            chromosome_labels.setdefault(key, chromosome_label(label))
+
+        offsets = {}
+        cursor = 0
+        for key in sorted(chromosome_max):
+            offsets[key] = cursor
+            cursor += chromosome_max[key] + 1
+
+        x = [offsets[key] + position for key, _, position, _ in genomic_rows]
+        y = [-math.log10(p) for _, _, _, p in genomic_rows]
+        chromosome_index = {key: index for index, key in enumerate(sorted(chromosome_max))}
+        colors = ['#3155b7' if chromosome_index[key] % 2 == 0 else '#b21f35' for key, _, _, _ in genomic_rows]
+        ticks = [offsets[key] + chromosome_max[key] / 2 for key in sorted(chromosome_max)]
+        labels = [chromosome_labels[key] for key in sorted(chromosome_max)]
+
+        plt.figure(figsize=(16, 7))
+        plt.scatter(x, y, c=colors, s=3, linewidths=0, rasterized=True)
+        plt.axhline(-math.log10(5e-8), color='#b21f35', linestyle='--', linewidth=1, label='P = 5e-8')
+        plt.axhline(-math.log10(1e-5), color='#777777', linestyle=':', linewidth=1, label='P = 1e-5')
+        plt.xticks(ticks, labels)
+        plt.xlabel('Chromosome')
+        plt.ylabel('-log10(P)')
+        plt.title('Manhattan plot')
+        plt.legend(frameon=False, loc='upper right')
+        plt.tight_layout()
+        plt.savefig(out / f'{prefix}.manhattan.png', dpi=180)
+        plt.close()
+
+    if p_ranked:
+        observed = [-math.log10(p) for _, p in p_ranked]
+        expected = [-math.log10((i + 0.5) / len(p_ranked)) for i in range(len(p_ranked))]
+        limit = max(expected[0], observed[0])
+        plt.figure(figsize=(7, 7))
+        plt.scatter(expected, observed, s=3, linewidths=0, rasterized=True)
+        plt.plot([0, limit], [0, limit], color='#b21f35', linewidth=1)
+        plt.xlim(0, limit * 1.02)
+        plt.ylim(0, limit * 1.02)
+        plt.xlabel('Expected -log10(P)')
+        plt.ylabel('Observed -log10(P)')
+        plt.title('QQ plot')
+        plt.tight_layout()
+        plt.savefig(out / f'{prefix}.qq.png', dpi=180)
+        plt.close()
 except ImportError:
     pass
 PY
