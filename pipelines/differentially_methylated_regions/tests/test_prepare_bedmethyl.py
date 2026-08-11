@@ -25,7 +25,7 @@ def write_bedmethyl(path, rows):
         handle.writelines(rows)
 
 
-def test_same_coordinate_strands_are_canonicalized(tmp_path):
+def test_same_coordinate_strands_are_combined_for_dss(tmp_path):
     source = tmp_path / "sample.bedmethyl.gz"
     write_bedmethyl(source, [
         bedmethyl_row(73820656, "-", 4),
@@ -36,8 +36,7 @@ def test_same_coordinate_strands_are_canonicalized(tmp_path):
     records = MODULE.coalesced(MODULE.bedmethyl_records(source, "m", None))
 
     assert [(row[1], row[4], row[5], row[6]) for row in records] == [
-        (73820656, "+", 10, 6),
-        (73820656, "-", 10, 4),
+        (73820656, ".", 20, 10),
         (73820657, ".", 10, 5),
     ]
 

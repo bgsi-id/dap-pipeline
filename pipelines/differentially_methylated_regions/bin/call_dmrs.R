@@ -1,146 +1,290 @@
 #!/usr/bin/env Rscript
 
-args <- commandArgs(trailingOnly=TRUE)
-if (length(args) != 11) stop('expected matrix_dir, output_dir, partition, region and seven analysis parameters')
+# Cohort DMR calling with DSS. The data path follows nf-core/methylong's
+# population-scale DSS implementation: one chr/pos/N/X table per biological
+# replicate, DMLtest, callDML, then callDMR.
+
+args <- commandArgs(trailingOnly = TRUE)
+if (length(args) != 13) {
+  stop(paste(
+    'expected matrix_dir, output_dir, partition, region, p_threshold,',
+    'delta, min_length, min_cpgs, merge_distance, significant_fraction,',
+    'equal_dispersion, smoothing, and ncores'
+  ))
+}
+
 matrix_dir <- args[[1]]
 out <- args[[2]]
 partition <- args[[3]]
 genomic_region <- args[[4]]
-fdr_threshold <- as.numeric(args[[5]])
-lambda <- as.numeric(args[[6]])
-bandwidth_scaling <- as.numeric(args[[7]])
+p_threshold <- as.numeric(args[[5]])
+delta <- as.numeric(args[[6]])
+min_length <- as.integer(args[[7]])
 min_cpgs <- as.integer(args[[8]])
-min_delta_beta <- as.numeric(args[[9]])
-profile_spar <- as.numeric(args[[10]])
-min_sites <- as.integer(args[[11]])
+merge_distance <- as.integer(args[[9]])
+significant_fraction <- as.numeric(args[[10]])
+equal_dispersion <- tolower(args[[11]]) == 'true'
+smoothing <- tolower(args[[12]]) == 'true'
+ncores <- as.integer(args[[13]])
 
 dir.create(out)
-beta_frame <- read.delim(gzfile(file.path(matrix_dir,'beta.tsv.gz')),check.names=FALSE)
-probes <- read.delim(gzfile(file.path(matrix_dir,'probes.tsv.gz')),check.names=FALSE)
-metadata <- read.delim(file.path(matrix_dir,'metadata.tsv'),check.names=FALSE,stringsAsFactors=FALSE)
-if (nrow(beta_frame) < min_sites) {
-  write.table(data.frame(seqnames=character(),start=integer(),end=integer()),file.path(out,'dmr-results.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
-  write.table(data.frame(probe_id=character(),chrom=character(),position=integer(),delta_beta=numeric(),t=numeric(),p_value=numeric(),fdr=numeric()),file.path(out,'cpg-results.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
-  write.table(data.frame(metric=c('partition','status','cpgs_available','minimum_cpgs'),value=c(partition,'insufficient_sites',nrow(beta_frame),min_sites)),file.path(out,'dmr-metrics.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
-  write.table(data.frame(partition=character(),chrom=character(),position=integer(),group=character(),mean_beta=numeric(),ci_lower=numeric(),ci_upper=numeric(),smoothed_beta=numeric()),file.path(out,'top-dmr-profile.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
-  png(file.path(out,'top-dmr-profile.png'),width=1400,height=800,res=140); plot.new(); text(.5,.55,paste('Insufficient',partition,'CpGs in requested region'),cex=1.2); text(.5,.45,paste(nrow(beta_frame),'available;',min_sites,'required'),cex=.9,col='#666666'); dev.off()
-  writeLines(c(paste('partition',partition,sep='\t'),paste('genomic_region',ifelse(nzchar(genomic_region),genomic_region,'genome-wide'),sep='\t'),'status\tinsufficient_sites','not_clinical_use\ttrue'),file.path(out,'provenance.tsv'))
-  quit(save='no',status=0)
-}
-required <- c('limma','DMRcate','GenomicRanges','IRanges')
-missing <- required[!vapply(required,requireNamespace,quietly=TRUE,FUN.VALUE=logical(1))]
-if (length(missing)) stop('DMR image is missing packages: ',paste(missing,collapse=', '))
-if (!identical(beta_frame$probe_id,probes$probe_id)) stop('beta matrix and probe coordinates disagree')
-if (!identical(names(beta_frame)[-1],metadata$sample_id)) stop('beta matrix and cohort membership disagree')
-groups <- factor(metadata$group,levels=c('control','patient'))
-if (anyNA(groups) || any(table(groups) < 3)) stop('control and patient each require at least three samples')
-beta <- as.matrix(beta_frame[,-1,drop=FALSE]); storage.mode(beta) <- 'double'; rownames(beta) <- beta_frame$probe_id
-if (any(!is.finite(beta),na.rm=TRUE) || any(beta < 0 | beta > 1,na.rm=TRUE)) stop('methylation fractions must be in [0,1]')
 
-design <- model.matrix(~groups)
-clipped <- pmin(pmax(beta,1e-6),1-1e-6)
-mvalues <- log2(clipped/(1-clipped))
-fit <- limma::eBayes(limma::lmFit(mvalues,design),robust=TRUE)
-p <- fit$p.value[,2]
-q <- p.adjust(p,'BH')
-statistic <- fit$t[,2]
-delta <- rowMeans(beta[,groups=='patient',drop=FALSE],na.rm=TRUE)-rowMeans(beta[,groups=='control',drop=FALSE],na.rm=TRUE)
-ranges <- GenomicRanges::GRanges(
-  seqnames=probes$chrom,
-  ranges=IRanges::IRanges(as.integer(probes$position),as.integer(probes$position)),
-  stat=statistic,rawpval=p,diff=delta,ind.fdr=q,is.sig=q<fdr_threshold
-)
-names(ranges) <- rownames(beta)
-annotated <- methods::new('CpGannotated',ranges=ranges)
-called <- DMRcate::dmrcate(
-  annotated,lambda=lambda,C=bandwidth_scaling,min.cpgs=min_cpgs,
-  betacutoff=min_delta_beta
-)
-dmrs <- as.data.frame(DMRcate::extractRanges(called,genome='hg38'))
-write.table(
-  data.frame(probe_id=rownames(beta),chrom=probes$chrom,position=probes$position,
-             delta_beta=delta,t=statistic,p_value=p,fdr=q),
-  file.path(out,'cpg-results.tsv'),sep='\t',quote=FALSE,row.names=FALSE
-)
-write.table(dmrs,file.path(out,'dmr-results.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
-metrics <- data.frame(
-  metric=c('partition','samples','control_samples','patient_samples','cpgs_tested','cpgs_fdr','dmrs'),
-  value=c(partition,ncol(beta),sum(groups=='control'),sum(groups=='patient'),nrow(beta),sum(q<fdr_threshold,na.rm=TRUE),nrow(dmrs))
-)
-write.table(metrics,file.path(out,'dmr-metrics.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
-
-profile_columns <- c('partition','chrom','position','group','mean_beta','ci_lower','ci_upper','smoothed_beta')
-profile <- data.frame(matrix(ncol=length(profile_columns),nrow=0,dimnames=list(NULL,profile_columns)))
-png(file.path(out,'top-dmr-profile.png'),width=1400,height=800,res=140)
-if (nrow(dmrs)) {
-  top <- dmrs[1,,drop=FALSE]
-  chr_col <- intersect(c('seqnames','chr','chromosome'),names(top))[1]
-  start_col <- intersect(c('start','Start'),names(top))[1]
-  end_col <- intersect(c('end','End'),names(top))[1]
-  if (any(is.na(c(chr_col,start_col,end_col)))) stop('DMR output lacks chromosome, start, or end')
-  same_chr <- sub('^chr','',as.character(probes$chrom),ignore.case=TRUE) == sub('^chr','',as.character(top[[chr_col]][1]),ignore.case=TRUE)
-  in_region <- same_chr & probes$position >= as.integer(top[[start_col]][1]) & probes$position <= as.integer(top[[end_col]][1])
-  indices <- which(in_region)
-  if (length(indices) < 2) stop('top DMR contains fewer than two plotted CpGs')
-  positions <- as.integer(probes$position[indices])
-  ord <- order(positions); indices <- indices[ord]; positions <- positions[ord]
-  plot_x <- seq(min(positions),max(positions),length.out=max(200,length(unique(positions))))
-  colours <- c('#0072B2','#D55E00')
-  plotted <- list()
-  for (group_index in seq_along(levels(groups))) {
-    group_name <- levels(groups)[group_index]
-    group_values <- beta[indices,groups == group_name,drop=FALSE]
-    observations <- rowSums(!is.na(group_values))
-    means <- rowMeans(group_values,na.rm=TRUE)
-    standard_error <- apply(group_values,1,sd,na.rm=TRUE) / sqrt(observations)
-    standard_error[!is.finite(standard_error)] <- 0
-    lower <- pmax(0,means-1.96*standard_error)
-    upper <- pmin(1,means+1.96*standard_error)
-    unique_positions <- sort(unique(positions))
-    collapse <- function(values) vapply(unique_positions,function(position) mean(values[positions == position],na.rm=TRUE),numeric(1))
-    unique_means <- collapse(means); unique_lower <- collapse(lower); unique_upper <- collapse(upper)
-    smooth_values <- function(values) {
-      if (length(unique_positions) >= 4) predict(smooth.spline(unique_positions,values,spar=profile_spar),plot_x)$y
-      else approx(unique_positions,values,xout=plot_x,rule=2)$y
-    }
-    smooth_mean <- pmin(1,pmax(0,smooth_values(unique_means)))
-    smooth_lower <- pmin(smooth_mean,pmax(0,smooth_values(unique_lower)))
-    smooth_upper <- pmax(smooth_mean,pmin(1,smooth_values(unique_upper)))
-    plotted[[group_index]] <- list(name=group_name,n=ncol(group_values),mean=smooth_mean,lower=smooth_lower,upper=smooth_upper)
-    profile <- rbind(profile,data.frame(
-      partition=partition,chrom=as.character(top[[chr_col]][1]),position=plot_x,
-      group=group_name,mean_beta=approx(unique_positions,unique_means,xout=plot_x,rule=2)$y,
-      ci_lower=smooth_lower,ci_upper=smooth_upper,smoothed_beta=smooth_mean
-    ))
-  }
-  plot(
-    plot_x,plotted[[1]]$mean,type='n',ylim=c(0,1),
-    xlab=paste0(as.character(top[[chr_col]][1]),' genomic position (GRCh38)'),
-    ylab='Mean methylation fraction',
-    main=paste0('Top DMR — ',partition,' normalized group profiles'),las=1
+empty_outputs <- function(status, sites) {
+  write.table(
+    data.frame(
+      chr = character(), start = integer(), end = integer(), length = integer(),
+      nCG = integer(), meanMethy1 = numeric(), meanMethy2 = numeric(),
+      diff.Methy = numeric(), areaStat = numeric()
+    ),
+    file.path(out, 'dmr-results.tsv'), sep = '\t', quote = FALSE, row.names = FALSE
   )
-  graphics::grid(col='#E5E5E5',lty=1)
-  for (group_index in seq_along(plotted)) {
-    item <- plotted[[group_index]]; colour <- colours[group_index]
-    polygon(c(plot_x,rev(plot_x)),c(item$lower,rev(item$upper)),col=adjustcolor(colour,alpha.f=0.18),border=NA)
-    lines(plot_x,item$mean,col=colour,lwd=3)
-  }
-  legend('topright',legend=vapply(plotted,function(item) paste0(item$name,' (n=',item$n,')'),character(1)),col=colours,lwd=3,bty='n')
-  mtext('Group means smoothed across CpGs; bands are approximate 95% confidence intervals.',side=1,line=4,cex=.8)
-} else {
-  plot.new(); text(.5,.55,paste('No',partition,'DMR passed the configured thresholds'),cex=1.2)
-  text(.5,.45,'No regional methylation profile is available',cex=.9,col='#666666')
+  write.table(
+    data.frame(
+      chr = character(), pos = integer(), mu1 = numeric(), mu2 = numeric(),
+      diff = numeric(), diff.se = numeric(), stat = numeric(), phi1 = numeric(),
+      phi2 = numeric(), pval = numeric(), fdr = numeric()
+    ),
+    file.path(out, 'cpg-results.tsv'), sep = '\t', quote = FALSE, row.names = FALSE
+  )
+  write.table(
+    data.frame(
+      chr = character(), pos = integer(), mu1 = numeric(), mu2 = numeric(),
+      diff = numeric(), diff.se = numeric(), stat = numeric(), phi1 = numeric(),
+      phi2 = numeric(), pval = numeric(), fdr = numeric()
+    ),
+    file.path(out, 'dml-results.tsv'), sep = '\t', quote = FALSE, row.names = FALSE
+  )
+  write.table(
+    data.frame(metric = c('partition', 'status', 'cpgs_available'), value = c(partition, status, sites)),
+    file.path(out, 'dmr-metrics.tsv'), sep = '\t', quote = FALSE, row.names = FALSE
+  )
+  write.table(
+    data.frame(
+      partition = character(), chrom = character(), position = integer(),
+      group = character(), mean_beta = numeric()
+    ),
+    file.path(out, 'top-dmr-profile.tsv'), sep = '\t', quote = FALSE, row.names = FALSE
+  )
+  png(file.path(out, 'top-dmr-profile.png'), width = 1400, height = 800, res = 140)
+  plot.new()
+  text(.5, .55, paste('No', partition, 'DMR plot available'), cex = 1.2)
+  text(.5, .45, paste('Status:', status), cex = .9, col = '#666666')
+  dev.off()
+  file.copy(
+    file.path(out, 'top-dmr-profile.png'), file.path(out, 'top-dmr-dss.png'),
+    overwrite = TRUE
+  )
 }
-dev.off()
-write.table(profile,file.path(out,'top-dmr-profile.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
+
+required <- c('DSS', 'bsseq')
+missing <- required[!vapply(required, requireNamespace, quietly = TRUE, FUN.VALUE = logical(1))]
+if (length(missing)) stop('DMR image is missing packages: ', paste(missing, collapse = ', '))
+suppressPackageStartupMessages(library(parallel))
+
+read_count_matrix <- function(name) {
+  frame <- read.delim(gzfile(file.path(matrix_dir, name)), check.names = FALSE)
+  if (!'probe_id' %in% names(frame)) stop(name, ' lacks probe_id')
+  frame
+}
+
+coverage_frame <- read_count_matrix('coverage.tsv.gz')
+modified_frame <- read_count_matrix('modified.tsv.gz')
+probes <- read.delim(gzfile(file.path(matrix_dir, 'probes.tsv.gz')), check.names = FALSE)
+metadata <- read.delim(
+  file.path(matrix_dir, 'metadata.tsv'), check.names = FALSE, stringsAsFactors = FALSE
+)
+
+if (!identical(coverage_frame$probe_id, modified_frame$probe_id) ||
+    !identical(coverage_frame$probe_id, probes$probe_id)) {
+  stop('coverage, modified-count, and probe-coordinate tables disagree')
+}
+if (!identical(names(coverage_frame)[-1], names(modified_frame)[-1]) ||
+    !identical(names(coverage_frame)[-1], metadata$sample_id)) {
+  stop('count matrices and cohort membership disagree')
+}
+if (anyDuplicated(paste(probes$chrom, probes$position, sep = ':'))) {
+  stop('DSS requires one CpG per genomic coordinate; duplicate coordinates remain after preprocessing')
+}
+
+groups <- factor(metadata$group, levels = c('control', 'patient'))
+if (anyNA(groups) || any(table(groups) < 3)) {
+  stop('control and patient each require at least three biological replicates')
+}
+
+coverage <- as.matrix(coverage_frame[, -1, drop = FALSE])
+modified <- as.matrix(modified_frame[, -1, drop = FALSE])
+storage.mode(coverage) <- 'double'
+storage.mode(modified) <- 'double'
+if (any(coverage <= 0, na.rm = TRUE) || any(modified < 0, na.rm = TRUE) ||
+    any(modified > coverage, na.rm = TRUE)) {
+  stop('invalid DSS counts: require N > 0 and 0 <= X <= N')
+}
+
+if (nrow(probes) < min_cpgs) {
+  empty_outputs('insufficient_sites', nrow(probes))
+  writeLines(c(
+    paste('partition', partition, sep = '\t'),
+    paste('genomic_region', ifelse(nzchar(genomic_region), genomic_region, 'genome-wide'), sep = '\t'),
+    'method\tDSS DMLtest + callDML + callDMR',
+    'status\tinsufficient_sites',
+    'not_clinical_use\ttrue'
+  ), file.path(out, 'provenance.tsv'))
+  quit(save = 'no', status = 0)
+}
+
+sample_names <- metadata$sample_id
+sample_tables <- lapply(seq_along(sample_names), function(index) {
+  keep <- is.finite(coverage[, index]) & is.finite(modified[, index])
+  data.frame(
+    chr = as.character(probes$chrom[keep]),
+    pos = as.integer(probes$position[keep]),
+    N = as.integer(coverage[keep, index]),
+    X = as.integer(modified[keep, index])
+  )
+})
+if (any(vapply(sample_tables, nrow, integer(1)) == 0)) {
+  stop('at least one biological replicate has no retained CpGs')
+}
+
+bs_object <- DSS::makeBSseqData(sample_tables, sample_names)
+patient_samples <- sample_names[groups == 'patient']
+control_samples <- sample_names[groups == 'control']
+
+# Group 1 is patient and group 2 is control, matching methylong's case/control
+# ordering. Therefore DSS diff and DMR diff.Methy are patient minus control.
+dml_test <- DSS::DMLtest(
+  bs_object,
+  group1 = patient_samples,
+  group2 = control_samples,
+  equal.disp = equal_dispersion,
+  smoothing = smoothing,
+  ncores = ncores
+)
+dml_calls <- DSS::callDML(dml_test, delta = delta, p.threshold = p_threshold)
+dmr_calls <- DSS::callDMR(
+  dml_test,
+  delta = delta,
+  p.threshold = p_threshold,
+  minlen = min_length,
+  minCG = min_cpgs,
+  dis.merge = merge_distance,
+  pct.sig = significant_fraction
+)
+
+write.table(
+  dml_test, file.path(out, 'cpg-results.tsv'), sep = '\t', quote = FALSE, row.names = FALSE
+)
+write.table(
+  dml_calls, file.path(out, 'dml-results.tsv'), sep = '\t', quote = FALSE, row.names = FALSE
+)
+write.table(
+  dmr_calls, file.path(out, 'dmr-results.tsv'), sep = '\t', quote = FALSE, row.names = FALSE
+)
+
+metrics <- data.frame(
+  metric = c(
+    'partition', 'method', 'samples', 'control_samples', 'patient_samples',
+    'cpgs_tested', 'dmls', 'dmrs'
+  ),
+  value = c(
+    partition, 'DSS', length(sample_names), length(control_samples), length(patient_samples),
+    nrow(dml_test), nrow(dml_calls), nrow(dmr_calls)
+  )
+)
+write.table(
+  metrics, file.path(out, 'dmr-metrics.tsv'), sep = '\t', quote = FALSE, row.names = FALSE
+)
+
+profile <- data.frame(
+  partition = character(), chrom = character(), position = integer(),
+  group = character(), mean_beta = numeric()
+)
+if (nrow(dmr_calls)) {
+  png(file.path(out, 'top-dmr-dss.png'), width = 1400, height = 800, res = 140)
+  DSS::showOneDMR(dmr_calls[1, , drop = FALSE], bs_object)
+  dev.off()
+
+  top <- dmr_calls[1, , drop = FALSE]
+  in_top <- probes$chrom == top$chr[[1]] &
+    probes$position >= top$start[[1]] & probes$position <= top$end[[1]]
+  beta <- modified / coverage
+  group_profiles <- list()
+  for (group_name in c('control', 'patient')) {
+    members <- groups == group_name
+    group_profile <- data.frame(
+      partition = partition,
+      chrom = as.character(probes$chrom[in_top]),
+      position = as.integer(probes$position[in_top]),
+      group = group_name,
+      mean_beta = rowMeans(beta[in_top, members, drop = FALSE], na.rm = TRUE)
+    )
+    profile <- rbind(profile, group_profile)
+    group_profiles[[group_name]] <- group_profile
+  }
+
+  png(file.path(out, 'top-dmr-profile.png'), width = 1400, height = 800, res = 140)
+  colours <- c(control = '#0072B2', patient = '#D55E00')
+  positions <- sort(unique(profile$position))
+  plot(
+    range(positions), c(0, 1), type = 'n', las = 1,
+    xlab = paste0(top$chr[[1]], ' genomic position (GRCh38)'),
+    ylab = 'Mean methylation fraction',
+    main = paste0('Top DSS DMR — ', partition, ' cohort profiles')
+  )
+  grid(col = '#E5E5E5')
+  for (group_name in names(group_profiles)) {
+    item <- group_profiles[[group_name]]
+    points(item$position, item$mean_beta, pch = 16, cex = .65,
+           col = adjustcolor(colours[[group_name]], alpha.f = .4))
+    if (nrow(item) >= 4 && length(unique(item$position)) >= 4) {
+      fitted <- smooth.spline(item$position, item$mean_beta, spar = 0.6)
+      curve <- predict(fitted, seq(min(item$position), max(item$position), length.out = 300))
+      lines(curve$x, pmin(1, pmax(0, curve$y)), col = colours[[group_name]], lwd = 3)
+    } else {
+      lines(item$position, item$mean_beta, col = colours[[group_name]], lwd = 3)
+    }
+  }
+  legend(
+    'topright', legend = c(
+      paste0('control (n=', length(control_samples), ')'),
+      paste0('patient (n=', length(patient_samples), ')')
+    ), col = colours, lwd = 3, bty = 'n'
+  )
+  mtext(
+    sprintf('DSS patient - control = %.3f; curves are display-only cohort means.', top$diff.Methy[[1]]),
+    side = 1, line = 4, cex = .8
+  )
+  dev.off()
+} else {
+  png(file.path(out, 'top-dmr-profile.png'), width = 1400, height = 800, res = 140)
+  plot.new()
+  text(.5, .55, paste('No', partition, 'DMR passed DSS thresholds'), cex = 1.2)
+  text(.5, .45, 'No regional profile is available', cex = .9, col = '#666666')
+  dev.off()
+  file.copy(
+    file.path(out, 'top-dmr-profile.png'), file.path(out, 'top-dmr-dss.png'),
+    overwrite = TRUE
+  )
+}
+write.table(
+  profile, file.path(out, 'top-dmr-profile.tsv'), sep = '\t', quote = FALSE, row.names = FALSE
+)
 
 writeLines(c(
-  paste('partition',partition,sep='\t'),
-  paste('genomic_region',ifelse(nzchar(genomic_region),genomic_region,'genome-wide'),sep='\t'),
+  paste('partition', partition, sep = '\t'),
+  paste('genomic_region', ifelse(nzchar(genomic_region), genomic_region, 'genome-wide'), sep = '\t'),
   'contrast\tpatient - control',
-  'method\tDMRcate over limma moderated CpG tests',
-  'input\tmodkit bedMethyl valid coverage and modified counts',
+  'method\tDSS DMLtest + callDML + callDMR',
+  paste('p_threshold', p_threshold, sep = '\t'),
+  paste('delta', delta, sep = '\t'),
+  paste('min_length', min_length, sep = '\t'),
+  paste('min_cpgs', min_cpgs, sep = '\t'),
+  paste('merge_distance', merge_distance, sep = '\t'),
+  paste('significant_fraction', significant_fraction, sep = '\t'),
+  paste('equal_dispersion', equal_dispersion, sep = '\t'),
+  paste('smoothing', smoothing, sep = '\t'),
+  'input\tmodkit bedMethyl valid coverage (N) and modified counts (X)',
   'reference_genome\tGRCh38',
   if (partition == 'combined') 'interpretation\tprimary all-read result' else 'interpretation\texploratory haplotype/unphased partition; HP labels are not aligned across samples',
   'not_clinical_use\ttrue'
-),file.path(out,'provenance.tsv'))
+), file.path(out, 'provenance.tsv'))

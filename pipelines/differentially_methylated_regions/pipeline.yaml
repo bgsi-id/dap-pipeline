@@ -5,13 +5,13 @@ version: dev
 description: >-
   Compare two governed cohort packs using per-sample modkit bedMethyl assets.
   Produce a primary all-read analysis plus HP1, HP2 and ungrouped sensitivity
-  analyses with normalized cohort methylation profiles.
+  analyses using DSS beta-binomial differential methylation tests.
 engine: nextflow
 engine_version: 26.04.6
 workflow_type: NFL
 workflow_type_version: DSL2
 entrypoint: main.nf
-tags: [nextflow, nanopore, methylation, bedmethyl, dmr, development, limma, dmrcate]
+tags: [nextflow, nanopore, methylation, bedmethyl, dmr, development, dss, bsseq]
 estimate: "Input-dependent; bedMethyl normalization scales horizontally by sample"
 token_estimate: 20
 execution:
@@ -60,22 +60,59 @@ parameters:
     default: 3
     minimum: 3
     label: Minimum samples in each cohort
-  - name: min_sites
-    type: integer
-    required: false
-    default: 10
-    minimum: 2
-    label: Minimum covered CpGs required to call DMRs
-  - name: profile_spar
+  - name: dss_p_threshold
     type: number
     required: false
-    default: 0.6
+    default: 0.001
+    minimum: 0.000000001
+    maximum: 0.999999999
+    label: DSS DMR CpG p-value threshold
+  - name: dss_delta
+    type: number
+    required: false
+    default: 0.05
     minimum: 0
+    maximum: 0.999999999
+    label: Minimum absolute methylation difference
+  - name: dss_min_length
+    type: integer
+    required: false
+    default: 50
+    minimum: 1
+    label: Minimum DMR length (bp)
+  - name: dss_min_cpgs
+    type: integer
+    required: false
+    default: 3
+    minimum: 2
+    label: Minimum CpGs per DMR
+  - name: dss_merge_distance
+    type: integer
+    required: false
+    default: 50
+    minimum: 0
+    label: Maximum distance for merging nearby DMRs (bp)
+  - name: dss_significant_fraction
+    type: number
+    required: false
+    default: 0.5
+    minimum: 0.01
     maximum: 1
-    label: Regional profile smoothing
+    label: Minimum fraction of significant CpGs per DMR
+  - name: dss_equal_dispersion
+    type: boolean
+    required: false
+    default: true
+    label: Assume equal dispersion between cohorts
+  - name: dss_smoothing
+    type: boolean
+    required: false
+    default: false
+    label: Smooth methylation levels before DSS testing
 outputs:
   - {name: combined_dmrs, path: "results/combined/dmr-results.tsv", media_type: text/tab-separated-values}
   - {name: combined_profile, path: "results/combined/top-dmr-profile.png", media_type: image/png}
+  - {name: combined_dss_qc, path: "results/combined/top-dmr-dss.png", media_type: image/png}
   - {name: hp1_dmrs, path: "results/hp1/dmr-results.tsv", media_type: text/tab-separated-values}
   - {name: hp1_profile, path: "results/hp1/top-dmr-profile.png", media_type: image/png}
   - {name: hp2_dmrs, path: "results/hp2/dmr-results.tsv", media_type: text/tab-separated-values}

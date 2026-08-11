@@ -108,9 +108,14 @@ def main():
             for cohort in ("control", "patient")
         }
         with gzip.open(destination / "beta.tsv.gz", "wt") as beta, gzip.open(
-            destination / "probes.tsv.gz", "wt"
-        ) as probes:
-            beta.write("probe_id\t" + "\t".join(sample_ids) + "\n")
+            destination / "coverage.tsv.gz", "wt"
+        ) as coverage_matrix, gzip.open(
+            destination / "modified.tsv.gz", "wt"
+        ) as modified_matrix, gzip.open(destination / "probes.tsv.gz", "wt") as probes:
+            matrix_header = "probe_id\t" + "\t".join(sample_ids) + "\n"
+            beta.write(matrix_header)
+            coverage_matrix.write(matrix_header)
+            modified_matrix.write(matrix_header)
             probes.write("probe_id\tchrom\tposition\n")
             for key, values in merged_sites(paths):
                 observed += 1
@@ -126,14 +131,22 @@ def main():
                     continue
                 _, start, _, code, strand, chrom = key
                 probe_id = f"{chrom}:{start}:{code}:{strand}"
-                row = []
+                beta_row = []
+                coverage_row = []
+                modified_row = []
                 for index in range(len(samples)):
                     if index not in passing:
-                        row.append("NA")
+                        beta_row.append("NA")
+                        coverage_row.append("NA")
+                        modified_row.append("NA")
                     else:
                         coverage, modified = passing[index]
-                        row.append(f"{modified / coverage:.8g}")
-                beta.write(probe_id + "\t" + "\t".join(row) + "\n")
+                        beta_row.append(f"{modified / coverage:.8g}")
+                        coverage_row.append(str(coverage))
+                        modified_row.append(str(modified))
+                beta.write(probe_id + "\t" + "\t".join(beta_row) + "\n")
+                coverage_matrix.write(probe_id + "\t" + "\t".join(coverage_row) + "\n")
+                modified_matrix.write(probe_id + "\t" + "\t".join(modified_row) + "\n")
                 probes.write(f"{probe_id}\t{chrom}\t{start + 1}\n")
                 retained += 1
         metrics.append((partition, observed, retained))

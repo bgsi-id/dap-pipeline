@@ -104,7 +104,9 @@ def coalesced(records):
     def flush():
         for key in sorted(grouped):
             coverage, modified = grouped[key]
-            yield (*key, coverage, modified)
+            # DSS models one count observation per CpG coordinate and sample.
+            # This matches modkit pileup --combine-strands in methylong.
+            yield (*key, ".", coverage, modified)
 
     for record in records:
         coordinate = record[:3]
@@ -112,7 +114,7 @@ def coalesced(records):
             yield from flush()
             grouped = {}
         current_coordinate = coordinate
-        key = record[:5]
+        key = record[:4]
         coverage, modified = grouped.get(key, (0, 0))
         grouped[key] = (coverage + record[5], modified + record[6])
     if current_coordinate is not None:
