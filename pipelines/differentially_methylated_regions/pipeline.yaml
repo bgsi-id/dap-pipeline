@@ -35,6 +35,12 @@ parameters:
     required: false
     default: m
     label: Modified-base code
+  - name: genomic_region
+    type: string
+    required: false
+    default: ""
+    label: Genomic region (contig:start-end)
+    help: Optional 1-based inclusive interval, for example chr22:20000000-21000000.
   - name: min_coverage
     type: integer
     required: false
@@ -54,6 +60,12 @@ parameters:
     default: 3
     minimum: 3
     label: Minimum samples in each cohort
+  - name: min_sites
+    type: integer
+    required: false
+    default: 10
+    minimum: 2
+    label: Minimum covered CpGs required to call DMRs
   - name: profile_spar
     type: number
     required: false

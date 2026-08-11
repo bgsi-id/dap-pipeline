@@ -7,6 +7,7 @@ import gzip
 import hashlib
 import heapq
 import json
+import re
 from pathlib import Path
 
 
@@ -37,7 +38,23 @@ def verify_sha256(path, expected):
         raise SystemExit(f"SHA-256 mismatch for {path.name}")
 
 
-def bedmethyl_records(path, selected_code):
+def parse_region(value):
+    if not value:
+        return None
+    match = re.fullmatch(r"([^:\s]+):(\d+)-(\d+)", value)
+    if not match:
+        raise SystemExit("region must use contig:start-end with 1-based inclusive coordinates")
+    chrom, start, end = match.group(1), int(match.group(2)), int(match.group(3))
+    if start < 1 or end < start:
+        raise SystemExit("region coordinates are invalid")
+    return chrom, start - 1, end
+
+
+def same_contig(left, right):
+    return left.removeprefix("chr") == right.removeprefix("chr")
+
+
+def bedmethyl_records(path, selected_code, region):
     previous = None
     with gzip.open(path, "rt") as handle:
         for line_number, line in enumerate(handle, 1):
@@ -64,6 +81,12 @@ def bedmethyl_records(path, selected_code):
             if previous is not None and current < previous:
                 raise SystemExit(f"{path.name} is not coordinate sorted")
             previous = current
+            if region and not (
+                same_contig(record[0], region[0])
+                and record[2] > region[1]
+                and record[1] < region[2]
+            ):
+                continue
             yield record
 
 
@@ -145,8 +168,10 @@ def main():
     parser.add_argument("--hp2-sha256", default="")
     parser.add_argument("--ungrouped-sha256", default="")
     parser.add_argument("--mod-code", default="m")
+    parser.add_argument("--region", default="")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
+    region = parse_region(args.region)
 
     sample_id = base64.b64decode(args.sample_id_b64).decode("utf-8")
     if not sample_id or "\t" in sample_id or "\n" in sample_id:
@@ -159,9 +184,9 @@ def main():
         verify_sha256(source, getattr(args, f"{partition}_sha256"))
         output = args.output / f"{partition}.tsv.gz"
         counts[partition] = write_records(
-            output, coalesced(bedmethyl_records(source, args.mod_code))
+            output, coalesced(bedmethyl_records(source, args.mod_code, region))
         )
-        if counts[partition] == 0:
+        if counts[partition] == 0 and region is None:
             raise SystemExit(f"{source.name} contains no {args.mod_code!r} records")
         normalized_paths.append(output)
     counts["combined"] = write_records(
@@ -174,6 +199,7 @@ def main():
                 "cohort": args.cohort,
                 "task_key": args.task_key,
                 "mod_code": args.mod_code,
+                "genomic_region": args.region or "genome-wide",
                 "records": counts,
                 "sources": {name: path.name for name, path in source_paths.items()},
             },

@@ -80,6 +80,10 @@ def main():
     if len(sample_ids) != len(set(sample_ids)):
         raise SystemExit("sample IDs must be unique across cohorts")
     cohorts = [item["cohort"] for item in samples]
+    regions = {item.get("genomic_region", "genome-wide") for item in samples}
+    if len(regions) != 1:
+        raise SystemExit("prepared samples disagree on genomic region")
+    genomic_region = regions.pop()
     for cohort in ("control", "patient"):
         if cohorts.count(cohort) < args.min_samples_per_cohort:
             raise SystemExit(
@@ -95,6 +99,8 @@ def main():
             handle.write("sample_id\tgroup\n")
             for sample in samples:
                 handle.write(f"{sample['sample_id']}\t{sample['cohort']}\n")
+        with (destination / "analysis.tsv").open("w") as handle:
+            handle.write(f"genomic_region\t{genomic_region}\n")
         paths = [item["directory"] / f"{partition}.tsv.gz" for item in samples]
         retained = observed = 0
         required = {
@@ -132,6 +138,7 @@ def main():
                 retained += 1
         metrics.append((partition, observed, retained))
     with (args.output.parent / "matrix-metrics.tsv").open("w") as handle:
+        handle.write(f"#genomic_region\t{genomic_region}\n")
         handle.write("partition\tsites_observed\tsites_retained\n")
         for row in metrics:
             handle.write("\t".join(map(str, row)) + "\n")

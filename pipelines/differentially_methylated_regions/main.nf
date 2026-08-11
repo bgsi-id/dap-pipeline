@@ -6,10 +6,11 @@ params.dap_input_manifest = null
 params.dap_output_uri = null
 params.cohort_id = null
 params.mod_code = 'm'
+params.genomic_region = ''
 params.min_coverage = 5
 params.min_sample_fraction = 0.8
 params.min_samples_per_cohort = 3
-params.min_sites = 100
+params.min_sites = 10
 params.fdr_threshold = 0.05
 params.lambda = 1000
 params.bandwidth_scaling = 2
@@ -88,6 +89,7 @@ process PREPARE_SAMPLE_METHYLATION {
       --hp2 '${hp2}' --hp2-sha256 '${hp2_sha256}' \
       --ungrouped '${ungrouped}' --ungrouped-sha256 '${ungrouped_sha256}' \
       --mod-code '${params.mod_code}' \
+      --region '${params.genomic_region}' \
       --output '${task_key}.prepared'
     """
 
@@ -137,6 +139,7 @@ process BUILD_METHYLATION_MATRICES {
       printf 'probe_id\tS1\n' | gzip > "matrices/\${partition}/beta.tsv.gz"
       printf 'probe_id\tchrom\tposition\n' | gzip > "matrices/\${partition}/probes.tsv.gz"
       printf 'sample_id\tgroup\nS1\tcontrol\n' > "matrices/\${partition}/metadata.tsv"
+      printf 'genomic_region\t%s\n' '${params.genomic_region ?: 'genome-wide'}' > "matrices/\${partition}/analysis.tsv"
     done
     printf 'partition\tsites_observed\tsites_retained\n' > matrix-metrics.tsv
     """
@@ -159,7 +162,7 @@ process CALL_DMRS {
     """
     set -euo pipefail
     Rscript '${projectDir}/bin/call_dmrs.R' \
-      '${matrix_dir}' '${partition}.dmr' '${partition}' \
+      '${matrix_dir}' '${partition}.dmr' '${partition}' '${params.genomic_region}' \
       ${params.fdr_threshold} ${params.lambda} ${params.bandwidth_scaling} \
       ${params.min_cpgs} ${params.min_delta_beta} ${params.profile_spar} ${params.min_sites}
     """
@@ -209,7 +212,9 @@ workflow {
     if (!params.dap_output_uri) error 'dap_output_uri is required'
     safe_analysis_id(params.cohort_id)
     if (!(params.mod_code ==~ /[A-Za-z][A-Za-z0-9?+-]{0,15}/)) error 'invalid mod_code'
+    if (params.genomic_region && !(params.genomic_region ==~ /[A-Za-z0-9_.-]+:[0-9]+-[0-9]+/)) error 'genomic_region must use contig:start-end'
     if ((params.min_coverage as Integer) < 1) error 'min_coverage must be positive'
+    if ((params.min_sites as Integer) < 2) error 'min_sites must be at least 2'
     if ((params.min_samples_per_cohort as Integer) < 3) error 'min_samples_per_cohort must be at least 3'
     if ((params.min_sample_fraction as BigDecimal) <= 0 || (params.min_sample_fraction as BigDecimal) > 1) error 'min_sample_fraction must be in (0,1]'
     if ((params.profile_spar as BigDecimal) < 0 || (params.profile_spar as BigDecimal) > 1) error 'profile_spar must be between 0 and 1'

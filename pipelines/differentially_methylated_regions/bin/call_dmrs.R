@@ -1,27 +1,35 @@
 #!/usr/bin/env Rscript
 
 args <- commandArgs(trailingOnly=TRUE)
-if (length(args) != 10) stop('expected matrix_dir, output_dir, partition and seven analysis parameters')
+if (length(args) != 11) stop('expected matrix_dir, output_dir, partition, region and seven analysis parameters')
 matrix_dir <- args[[1]]
 out <- args[[2]]
 partition <- args[[3]]
-fdr_threshold <- as.numeric(args[[4]])
-lambda <- as.numeric(args[[5]])
-bandwidth_scaling <- as.numeric(args[[6]])
-min_cpgs <- as.integer(args[[7]])
-min_delta_beta <- as.numeric(args[[8]])
-profile_spar <- as.numeric(args[[9]])
-min_sites <- as.integer(args[[10]])
-
-required <- c('limma','DMRcate','GenomicRanges','IRanges')
-missing <- required[!vapply(required,requireNamespace,quietly=TRUE,FUN.VALUE=logical(1))]
-if (length(missing)) stop('DMR image is missing packages: ',paste(missing,collapse=', '))
+genomic_region <- args[[4]]
+fdr_threshold <- as.numeric(args[[5]])
+lambda <- as.numeric(args[[6]])
+bandwidth_scaling <- as.numeric(args[[7]])
+min_cpgs <- as.integer(args[[8]])
+min_delta_beta <- as.numeric(args[[9]])
+profile_spar <- as.numeric(args[[10]])
+min_sites <- as.integer(args[[11]])
 
 dir.create(out)
 beta_frame <- read.delim(gzfile(file.path(matrix_dir,'beta.tsv.gz')),check.names=FALSE)
 probes <- read.delim(gzfile(file.path(matrix_dir,'probes.tsv.gz')),check.names=FALSE)
 metadata <- read.delim(file.path(matrix_dir,'metadata.tsv'),check.names=FALSE,stringsAsFactors=FALSE)
-if (nrow(beta_frame) < min_sites) stop('too few coverage-filtered CpGs for DMR analysis')
+if (nrow(beta_frame) < min_sites) {
+  write.table(data.frame(seqnames=character(),start=integer(),end=integer()),file.path(out,'dmr-results.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
+  write.table(data.frame(probe_id=character(),chrom=character(),position=integer(),delta_beta=numeric(),t=numeric(),p_value=numeric(),fdr=numeric()),file.path(out,'cpg-results.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
+  write.table(data.frame(metric=c('partition','status','cpgs_available','minimum_cpgs'),value=c(partition,'insufficient_sites',nrow(beta_frame),min_sites)),file.path(out,'dmr-metrics.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
+  write.table(data.frame(partition=character(),chrom=character(),position=integer(),group=character(),mean_beta=numeric(),ci_lower=numeric(),ci_upper=numeric(),smoothed_beta=numeric()),file.path(out,'top-dmr-profile.tsv'),sep='\t',quote=FALSE,row.names=FALSE)
+  png(file.path(out,'top-dmr-profile.png'),width=1400,height=800,res=140); plot.new(); text(.5,.55,paste('Insufficient',partition,'CpGs in requested region'),cex=1.2); text(.5,.45,paste(nrow(beta_frame),'available;',min_sites,'required'),cex=.9,col='#666666'); dev.off()
+  writeLines(c(paste('partition',partition,sep='\t'),paste('genomic_region',ifelse(nzchar(genomic_region),genomic_region,'genome-wide'),sep='\t'),'status\tinsufficient_sites','not_clinical_use\ttrue'),file.path(out,'provenance.tsv'))
+  quit(save='no',status=0)
+}
+required <- c('limma','DMRcate','GenomicRanges','IRanges')
+missing <- required[!vapply(required,requireNamespace,quietly=TRUE,FUN.VALUE=logical(1))]
+if (length(missing)) stop('DMR image is missing packages: ',paste(missing,collapse=', '))
 if (!identical(beta_frame$probe_id,probes$probe_id)) stop('beta matrix and probe coordinates disagree')
 if (!identical(names(beta_frame)[-1],metadata$sample_id)) stop('beta matrix and cohort membership disagree')
 groups <- factor(metadata$group,levels=c('control','patient'))
@@ -128,6 +136,7 @@ write.table(profile,file.path(out,'top-dmr-profile.tsv'),sep='\t',quote=FALSE,ro
 
 writeLines(c(
   paste('partition',partition,sep='\t'),
+  paste('genomic_region',ifelse(nzchar(genomic_region),genomic_region,'genome-wide'),sep='\t'),
   'contrast\tpatient - control',
   'method\tDMRcate over limma moderated CpG tests',
   'input\tmodkit bedMethyl valid coverage and modified counts',
