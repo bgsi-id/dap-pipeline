@@ -22,7 +22,7 @@ data_input:
   accepted_pack_kinds: [cohort]
   named_packs: [control, patient]
   required_assets:
-    - role: methylation
+    - role: bedmethyl
       scope: sample
       required: true
 parameters:
