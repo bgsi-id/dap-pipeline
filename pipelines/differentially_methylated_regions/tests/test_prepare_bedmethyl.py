@@ -11,9 +11,9 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
-def bedmethyl_row(start, strand=".", modified=5):
+def bedmethyl_row(start, strand=".", modified=5, chrom="chrX"):
     fields = [
-        "chrX", str(start), str(start + 1), "m", "10", strand,
+        chrom, str(start), str(start + 1), "m", "10", strand,
         str(start), str(start + 1), "255,0,0", "10", "50.0",
         str(modified), "0", str(10 - modified), "0", "0", "0", "0",
     ]
@@ -48,3 +48,21 @@ def test_coordinate_regression_is_rejected(tmp_path):
 
     with pytest.raises(SystemExit, match="not coordinate sorted"):
         list(MODULE.bedmethyl_records(source, "m", None))
+
+
+def test_region_ignores_order_of_unselected_contigs(tmp_path):
+    source = tmp_path / "sample.bedmethyl.gz"
+    write_bedmethyl(source, [
+        bedmethyl_row(200, chrom="chr2"),
+        bedmethyl_row(100, chrom="chr1"),
+        bedmethyl_row(73820656),
+        bedmethyl_row(73820657),
+    ])
+    region = MODULE.parse_region("chrX:73800000-73900000")
+
+    records = list(MODULE.bedmethyl_records(source, "m", region))
+
+    assert [(row[0], row[1]) for row in records] == [
+        ("chrX", 73820656),
+        ("chrX", 73820657),
+    ]

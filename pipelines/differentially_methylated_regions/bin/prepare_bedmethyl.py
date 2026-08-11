@@ -82,18 +82,18 @@ def bedmethyl_records(path, selected_code, region):
                 raise SystemExit(f"{path.name}:{line_number}: invalid genomic interval")
             if record[5] < 0 or not 0 <= record[6] <= record[5]:
                 raise SystemExit(f"{path.name}:{line_number}: invalid modification counts")
-            # bedMethyl is coordinate sorted, but rows sharing an interval are
-            # not required to be ordered lexically by modification or strand.
-            current = coordinate_key(record)
-            if previous is not None and current < previous:
-                raise SystemExit(f"{path.name} is not coordinate sorted")
-            previous = current
             if region and not (
                 same_contig(record[0], region[0])
                 and record[2] > region[1]
                 and record[1] < region[2]
             ):
                 continue
+            # bedMethyl is coordinate sorted, but rows sharing an interval are
+            # not required to be ordered lexically by modification or strand.
+            current = coordinate_key(record)
+            if previous is not None and current < previous:
+                raise SystemExit(f"{path.name} is not coordinate sorted")
+            previous = current
             yield record
 
 
