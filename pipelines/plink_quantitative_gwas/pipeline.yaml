@@ -16,16 +16,23 @@ token_estimate: 40
 execution:
   preferred_location: alor
   resource_profile: standard
-inputs:
-  - role: genotypes
-    parameter: genotype_uri
-    required: true
-  - role: phenotypes
-    parameter: phenotype_uri
-    required: true
-  - role: bgen_sample
-    parameter: bgen_sample_uri
-    required: false
+data_input:
+  contract: dap-pack-manifest/v1
+  accepted_pack_kinds: [cohort]
+  required_assets:
+    - role: pvcf
+      scope: release
+      required: true
+    - role: pvcf_index
+      scope: release
+      required: true
+  file_inputs:
+    - id: phenotype_file
+      label: Phenotype file
+      description: Select the project file containing one quantitative value for each sample.
+      parameter: phenotype_uri
+      required: true
+      extensions: [.phen, .tsv, .csv]
 parameters:
   - name: cohort_id
     type: string
