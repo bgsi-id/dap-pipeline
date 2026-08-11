@@ -27,6 +27,11 @@ def order_key(record):
     return (contig_key(chrom), start, end, code, strand)
 
 
+def coordinate_key(record):
+    chrom, start, end = record[:3]
+    return (contig_key(chrom), start, end)
+
+
 def verify_sha256(path, expected):
     if not expected:
         return
@@ -77,7 +82,9 @@ def bedmethyl_records(path, selected_code, region):
                 raise SystemExit(f"{path.name}:{line_number}: invalid genomic interval")
             if record[5] < 0 or not 0 <= record[6] <= record[5]:
                 raise SystemExit(f"{path.name}:{line_number}: invalid modification counts")
-            current = order_key(record)
+            # bedMethyl is coordinate sorted, but rows sharing an interval are
+            # not required to be ordered lexically by modification or strand.
+            current = coordinate_key(record)
             if previous is not None and current < previous:
                 raise SystemExit(f"{path.name} is not coordinate sorted")
             previous = current
@@ -91,20 +98,25 @@ def bedmethyl_records(path, selected_code, region):
 
 
 def coalesced(records):
-    current_key = None
-    coverage = modified = 0
-    template = None
+    current_coordinate = None
+    grouped = {}
+
+    def flush():
+        for key in sorted(grouped):
+            coverage, modified = grouped[key]
+            yield (*key, coverage, modified)
+
     for record in records:
+        coordinate = record[:3]
+        if current_coordinate is not None and coordinate != current_coordinate:
+            yield from flush()
+            grouped = {}
+        current_coordinate = coordinate
         key = record[:5]
-        if current_key is not None and key != current_key:
-            yield (*template[:5], coverage, modified)
-            coverage = modified = 0
-        current_key = key
-        template = record
-        coverage += record[5]
-        modified += record[6]
-    if current_key is not None:
-        yield (*template[:5], coverage, modified)
+        coverage, modified = grouped.get(key, (0, 0))
+        grouped[key] = (coverage + record[5], modified + record[6])
+    if current_coordinate is not None:
+        yield from flush()
 
 
 def write_records(path, records):
