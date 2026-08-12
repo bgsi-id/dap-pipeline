@@ -1,7 +1,7 @@
 schema_version: "1.0"
 id: differentially-methylated-regions
 name: Differentially methylated region analysis
-version: dev
+version: 0.1.0
 description: >-
   Compare two governed cohort packs using per-sample modkit bedMethyl assets.
   Produce a primary all-read analysis plus HP1, HP2 and ungrouped sensitivity

@@ -4,14 +4,6 @@ pipelines:
     path: pipelines/cohort_summary
     descriptor: pipelines/cohort_summary/pipeline.yaml
     active: true
-  - id: hail-cohort-gwas
-    path: pipelines/hail_gwas
-    descriptor: pipelines/hail_gwas/pipeline.yaml
-    active: true
-  - id: hail-binary-gwas
-    path: pipelines/hail_binary_gwas
-    descriptor: pipelines/hail_binary_gwas/pipeline.yaml
-    active: true
   - id: plink-case-control-gwas
     path: pipelines/plink_gwas
     descriptor: pipelines/plink_gwas/pipeline.yaml
@@ -20,17 +12,9 @@ pipelines:
     path: pipelines/plink_quantitative_gwas
     descriptor: pipelines/plink_quantitative_gwas/pipeline.yaml
     active: true
-  - id: hail-cohort-prs
-    path: pipelines/hail_prs
-    descriptor: pipelines/hail_prs/pipeline.yaml
-    active: true
   - id: variant-etl
     path: pipelines/variant_etl
     descriptor: pipelines/variant_etl/pipeline.yaml
-    active: true
-  - id: genetic-ancestry-projection
-    path: pipelines/genetic_ancestry_projection
-    descriptor: pipelines/genetic_ancestry_projection/pipeline.yaml
     active: true
   - id: differentially-methylated-regions
     path: pipelines/differentially_methylated_regions
