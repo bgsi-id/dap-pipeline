@@ -17,6 +17,17 @@ token_estimate: 20
 execution:
   preferred_location: alor
   compute_profiles: [standard]
+inputs:
+  - role: vcf
+    label: Small-variant VCF
+    parameter: vcf_uri
+    checksum_parameter: vcf_sha256
+    required: true
+  - role: vcf_index
+    label: VCF index
+    parameter: vcf_index_uri
+    checksum_parameter: vcf_index_sha256
+    required: true
 data_input:
   contract: dap-pack-manifest/v1
   accepted_pack_kinds: [dataset, cohort]
