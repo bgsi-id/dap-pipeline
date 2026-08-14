@@ -129,7 +129,7 @@ process PCA_AND_KING {
     mkdir pca
     plink2 --bfile pregwas/clean --maf ${params.min_maf} --indep-pairwise 500 50 0.2 --out pca/pca-prune
     plink2 --bfile pregwas/clean --extract pca/pca-prune.prune.in --king-cutoff ${params.king_cutoff} --out pca/king
-    plink2 --bfile pregwas/clean --keep pca/king.king.cutoff.in.id --extract pca/pca-prune.prune.in --freq counts --pca approx allele-wts ${params.n_pcs} --out pca/pca
+    plink2 --bfile pregwas/clean --keep pca/king.king.cutoff.in.id --extract pca/pca-prune.prune.in --freq counts --pca allele-wts ${params.n_pcs} --out pca/pca
     plink2 --bfile pregwas/clean --read-freq pca/pca.acount --score pca/pca.eigenvec.allele 2 6 header-read no-mean-imputation variance-standardize --score-col-nums 7-${params.n_pcs + 6} --out pca/pca-projected
     """
 }
