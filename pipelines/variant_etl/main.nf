@@ -17,13 +17,17 @@ params.output_dir = 'results'
 params.release_id = null
 params.batch_id = null
 params.assembly = 'GRCh38'
-params.annotation_pack = 'grch38-v2'
+params.annotation_pack = 'grch38-v3'
 params.af_threshold = 0.01
 params.max_annotation_variants = null
 params.reference_dir = '/reference'
 params.fasta_name = 'GCA_000001405.15_GRCh38_no_alt_analysis_set.fna'
 params.gff_name = 'Homo_sapiens.GRCh38.116.chr.gff3.gz'
 params.gnomad_name = 'gnomad_v4.1.zip'
+params.gnomad_popmax_name = 'gnomad.v3.1.2.echtvar.popmax.v2.zip'
+params.clinvar_name = 'clinvar.chr.vcf.gz'
+params.spliceai_name = 'spliceai_scores.raw.snv.ensembl_mane_v1.4.grch38.vcf.gz'
+params.revel_name = 'revel_grch38.tsv.gz'
 params.vep_cache_dir = '/reference/vep'
 params.vep_cache_version = '116'
 params.vep_buffer_size = 5000
@@ -75,6 +79,13 @@ process PRECHECK_REFERENCES {
     test -s '${params.reference_dir}/${params.fasta_name}.fai'
     test -s '${params.reference_dir}/${params.gff_name}'
     test -s '${params.reference_dir}/${params.gnomad_name}'
+    test -s '${params.reference_dir}/${params.gnomad_popmax_name}'
+    test -s '${params.reference_dir}/${params.clinvar_name}'
+    test -s '${params.reference_dir}/${params.clinvar_name}.tbi' -o -s '${params.reference_dir}/${params.clinvar_name}.csi'
+    test -s '${params.reference_dir}/${params.spliceai_name}'
+    test -s '${params.reference_dir}/${params.spliceai_name}.tbi' -o -s '${params.reference_dir}/${params.spliceai_name}.csi'
+    test -s '${params.reference_dir}/${params.revel_name}'
+    test -s '${params.reference_dir}/${params.revel_name}.tbi'
     test -d '${params.vep_cache_dir}/homo_sapiens_merged/${params.vep_cache_version}_GRCh38'
     printf 'annotation_pack\t%s\nassembly\t%s\n' '${params.annotation_pack}' '${params.assembly}' > reference.ready
     """
@@ -219,7 +230,72 @@ process ANNOTATE_AF {
     script:
     """
     set -euo pipefail
-    echtvar anno -e '${params.reference_dir}/${params.gnomad_name}' '${sites_vcf}' site.gnomad.vcf.gz
+    echtvar anno \
+      -e '${params.reference_dir}/${params.gnomad_name}' \
+      -e '${params.reference_dir}/${params.gnomad_popmax_name}' \
+      '${sites_vcf}' site.gnomad.vcf.gz
+    """
+}
+
+
+process ANNOTATE_CLINVAR {
+    tag "${params.annotation_pack}"
+    container params.bcftools_image
+    cpus 8
+    memory '12 GB'
+    time '4h'
+
+    input:
+    path frequency_vcf
+    path reference_ready
+
+    output:
+    path 'site.clinvar.vcf.gz', emit: vcf
+    path 'site.clinvar.vcf.gz.tbi', emit: index
+
+    script:
+    """
+    set -euo pipefail
+    bcftools index -t --threads ${task.cpus} '${frequency_vcf}'
+    bcftools annotate \
+      -a '${params.reference_dir}/${params.clinvar_name}' \
+      -c INFO/CLNSIG,INFO/CLNSIGCONF,INFO/CLNREVSTAT,INFO/CLNDN,INFO/CLNVI \
+      --pair-logic exact \
+      --threads ${task.cpus} \
+      -Oz -o site.clinvar.vcf.gz \
+      '${frequency_vcf}'
+    bcftools index -t --threads ${task.cpus} site.clinvar.vcf.gz
+    """
+}
+
+
+process ANNOTATE_SPLICEAI {
+    tag "${params.annotation_pack}"
+    container params.bcftools_image
+    cpus 8
+    memory '12 GB'
+    time '4h'
+
+    input:
+    path clinvar_vcf
+    path clinvar_index
+    path reference_ready
+
+    output:
+    path 'site.spliceai.vcf.gz', emit: vcf
+    path 'site.spliceai.vcf.gz.tbi', emit: index
+
+    script:
+    """
+    set -euo pipefail
+    bcftools annotate \
+      -a '${params.reference_dir}/${params.spliceai_name}' \
+      -c INFO/SpliceAI \
+      --pair-logic exact \
+      --threads ${task.cpus} \
+      -Oz -o site.spliceai.vcf.gz \
+      '${clinvar_vcf}'
+    bcftools index -t --threads ${task.cpus} site.spliceai.vcf.gz
     """
 }
 
@@ -232,7 +308,8 @@ process ANNOTATE_LOCAL_CSQ {
     time '8h'
 
     input:
-    path frequency_vcf
+    path annotated_vcf
+    path annotated_index
     path reference_ready
 
     output:
@@ -248,7 +325,7 @@ process ANNOTATE_LOCAL_CSQ {
       --gff-annot '${params.reference_dir}/${params.gff_name}' \
       --threads ${task.cpus} \
       -Oz -o site.base.vcf.gz \
-      '${frequency_vcf}'
+      '${annotated_vcf}'
     bcftools index -t --threads ${task.cpus} site.base.vcf.gz
     """
 }
@@ -275,13 +352,13 @@ process SELECT_DETAIL_SITES {
     set -euo pipefail
     total=\$(bcftools index -n '${base_vcf}')
     bcftools view \
-      --include 'INFO/gnomad_af_max="." || INFO/gnomad_af_max=-1 || INFO/gnomad_af_max<${params.af_threshold}' \
+      --include '((INFO/gnomad_af_max="." || INFO/gnomad_af_max=-1 || INFO/gnomad_af_max<${params.af_threshold}) && (INFO/gnomad_af_popmax="." || INFO/gnomad_af_popmax=-1 || INFO/gnomad_af_popmax<${params.af_threshold})) || INFO/CLNSIG ~ "(?i)(pathogenic|likely_pathogenic)" || INFO/CLNSIGCONF ~ "(?i)(pathogenic|likely_pathogenic)" || INFO/SpliceAI ~ "(0\\.[5-9]|1\\.0)"' \
       --threads ${task.cpus} \
       -Oz -o site.small.vcf.gz \
       '${base_vcf}'
     bcftools index -t --threads ${task.cpus} site.small.vcf.gz
     selected=\$(bcftools index -n site.small.vcf.gz)
-    printf 'total_sites\t%s\nselected_sites\t%s\naf_threshold\t%s\n' \
+    printf 'total_sites\\t%s\\nselected_sites\\t%s\\naf_threshold\\t%s\\n' \
       "\${total}" "\${selected}" '${params.af_threshold}' > selection.tsv
     """
 }
@@ -311,6 +388,10 @@ process ANNOTATE_DETAIL_VEP {
     if [ "\${selected_count}" -eq 0 ]; then
       cp '${selected_vcf}' site.detail.vcf.gz
     else
+      revel_arg=""
+      if [ -f '${params.reference_dir}/${params.revel_name}' ]; then
+        revel_arg="--plugin REVEL,file=${params.reference_dir}/${params.revel_name}"
+      fi
       vep \
         --input_file '${selected_vcf}' \
         --output_file site.detail.vcf.gz \
@@ -323,6 +404,7 @@ process ANNOTATE_DETAIL_VEP {
         --allele_number --sift b --polyphen b \
         --shift_hgvs 1 --numbers --domains --protein --uniprot \
         --flag_pick --pick_order mane_select,mane_plus_clinical,canonical,rank \
+        \${revel_arg} \
         --fork ${task.cpus} --buffer_size ${params.vep_buffer_size} \
         --no_stats --force_overwrite
     fi
@@ -475,7 +557,9 @@ workflow {
     load_barrier = loaded.receipt.collect()
     sites = EXPORT_NOVEL_SITES(load_barrier, references)
     af = ANNOTATE_AF(sites.vcf, references)
-    base = ANNOTATE_LOCAL_CSQ(af.vcf, references)
+    clinvar = ANNOTATE_CLINVAR(af.vcf, references)
+    spliceai = ANNOTATE_SPLICEAI(clinvar.vcf, clinvar.index, references)
+    base = ANNOTATE_LOCAL_CSQ(spliceai.vcf, spliceai.index, references)
     selected = SELECT_DETAIL_SITES(base.vcf, base.index)
     vep = ANNOTATE_DETAIL_VEP(selected.vcf, selected.index, selected.metrics, references)
     detail = INDEX_DETAIL_VCF(vep.vcf)
