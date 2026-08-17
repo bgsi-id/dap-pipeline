@@ -1,3 +1,5 @@
 .nextflow*
 work/
 **/params.private.json
+**/__pycache__/
+*.py[cod]
