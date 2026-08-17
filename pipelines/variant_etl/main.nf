@@ -225,7 +225,7 @@ process ANNOTATE_AF {
     path reference_ready
 
     output:
-    path 'site.gnomad.vcf.gz', emit: vcf
+    path 'site.gnomad.raw.vcf.gz', emit: vcf
 
     script:
     """
@@ -233,7 +233,50 @@ process ANNOTATE_AF {
     echtvar anno \
       -e '${params.reference_dir}/${params.gnomad_name}' \
       -e '${params.reference_dir}/${params.gnomad_popmax_name}' \
-      '${sites_vcf}' site.gnomad.vcf.gz
+      '${sites_vcf}' site.gnomad.raw.vcf.gz
+    """
+}
+
+
+process NORMALIZE_AF_FIELDS {
+    tag "${params.annotation_pack}"
+    container params.bcftools_image
+    cpus 2
+    memory '4 GB'
+    time '2h'
+
+    input:
+    path raw_vcf
+    path reference_ready
+
+    output:
+    path 'site.gnomad.vcf.gz', emit: vcf
+
+    script:
+    """
+    set -euo pipefail
+    header="\$(bcftools view -h '${raw_vcf}')"
+    printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_af_max[>,]'
+    : > rename-annots.tsv
+    if ! printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_af_popmax[>,]'; then
+      printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_popmax_af[>,]' \
+        || { echo 'Echtvar output lacks gnomAD AF popmax field' >&2; exit 1; }
+      printf 'INFO/gnomad_popmax_af INFO/gnomad_af_popmax\n' >> rename-annots.tsv
+    fi
+    if ! printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_nhomalt[>,]'; then
+      printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_nhomalts[>,]' \
+        || { echo 'Echtvar output lacks gnomAD nhomalt field' >&2; exit 1; }
+      printf 'INFO/gnomad_nhomalts INFO/gnomad_nhomalt\n' >> rename-annots.tsv
+    fi
+    if [ -s rename-annots.tsv ]; then
+      bcftools annotate --rename-annots rename-annots.tsv -Oz \
+        -o site.gnomad.vcf.gz '${raw_vcf}'
+    else
+      cp '${raw_vcf}' site.gnomad.vcf.gz
+    fi
+    normalized_header="\$(bcftools view -h site.gnomad.vcf.gz)"
+    printf '%s\n' "\${normalized_header}" | grep -q '##INFO=<ID=gnomad_af_popmax[>,]'
+    printf '%s\n' "\${normalized_header}" | grep -q '##INFO=<ID=gnomad_nhomalt[>,]'
     """
 }
 
@@ -331,6 +374,32 @@ process ANNOTATE_LOCAL_CSQ {
 }
 
 
+process ADD_RESCUE_FIELDS {
+    tag "${params.annotation_pack}"
+    container params.bcftools_image
+    cpus 4
+    memory '4 GB'
+    time '2h'
+
+    input:
+    path base_vcf
+    path base_index
+
+    output:
+    path 'site.rescue.vcf.gz', emit: vcf
+    path 'site.rescue.vcf.gz.tbi', emit: index
+
+    script:
+    """
+    set -euo pipefail
+    bcftools view -Ov '${base_vcf}' \
+      | perl '${projectDir}/bin/add_rescue_fields.pl' \
+      | bcftools view -Oz --threads ${task.cpus} -o site.rescue.vcf.gz
+    bcftools index -t --threads ${task.cpus} site.rescue.vcf.gz
+    """
+}
+
+
 process SELECT_DETAIL_SITES {
     tag "AF<${params.af_threshold}"
     container params.bcftools_image
@@ -352,7 +421,7 @@ process SELECT_DETAIL_SITES {
     set -euo pipefail
     total=\$(bcftools index -n '${base_vcf}')
     bcftools view \
-      --include '((INFO/gnomad_af_max="." || INFO/gnomad_af_max=-1 || INFO/gnomad_af_max<${params.af_threshold}) && (INFO/gnomad_af_popmax="." || INFO/gnomad_af_popmax=-1 || INFO/gnomad_af_popmax<${params.af_threshold})) || INFO/CLNSIG ~ "(?i)(pathogenic|likely_pathogenic)" || INFO/CLNSIGCONF ~ "(?i)(pathogenic|likely_pathogenic)" || INFO/SpliceAI ~ "(0\\.[5-9]|1\\.0)"' \
+      --include '((INFO/gnomad_af_max="." || INFO/gnomad_af_max=-1 || INFO/gnomad_af_max<${params.af_threshold}) && (INFO/gnomad_af_popmax="." || INFO/gnomad_af_popmax=-1 || INFO/gnomad_af_popmax<${params.af_threshold})) || INFO/DAP_CLINVAR_RESCUE=1 || INFO/DAP_SPLICEAI_DS_MAX>=0.5' \
       --threads ${task.cpus} \
       -Oz -o site.small.vcf.gz \
       '${base_vcf}'
@@ -388,10 +457,7 @@ process ANNOTATE_DETAIL_VEP {
     if [ "\${selected_count}" -eq 0 ]; then
       cp '${selected_vcf}' site.detail.vcf.gz
     else
-      revel_arg=""
-      if [ -f '${params.reference_dir}/${params.revel_name}' ]; then
-        revel_arg="--plugin REVEL,file=${params.reference_dir}/${params.revel_name}"
-      fi
+      test -f /opt/vep/.vep/Plugins/REVEL.pm
       vep \
         --input_file '${selected_vcf}' \
         --output_file site.detail.vcf.gz \
@@ -404,7 +470,7 @@ process ANNOTATE_DETAIL_VEP {
         --allele_number --sift b --polyphen b \
         --shift_hgvs 1 --numbers --domains --protein --uniprot \
         --flag_pick --pick_order mane_select,mane_plus_clinical,canonical,rank \
-        \${revel_arg} \
+        --plugin REVEL,file='${params.reference_dir}/${params.revel_name}' \
         --fork ${task.cpus} --buffer_size ${params.vep_buffer_size} \
         --no_stats --force_overwrite
     fi
@@ -421,6 +487,7 @@ process INDEX_DETAIL_VCF {
 
     input:
     path vep_vcf, name: 'vep-output.vcf.gz'
+    path selection_metrics
 
     output:
     path 'site.detail.vcf.gz', emit: vcf
@@ -430,6 +497,13 @@ process INDEX_DETAIL_VCF {
     """
     set -euo pipefail
     cp vep-output.vcf.gz site.detail.vcf.gz
+    selected_count=\$(sed -n 's/^selected_sites[[:space:]]*//p' '${selection_metrics}')
+    test -n "\${selected_count}"
+    if [ "\${selected_count}" -gt 0 ]; then
+      bcftools view -h site.detail.vcf.gz \
+        | grep '##INFO=<ID=CSQ' \
+        | grep -q 'REVEL'
+    fi
     bcftools index -t --threads ${task.cpus} site.detail.vcf.gz
     """
 }
@@ -556,13 +630,15 @@ workflow {
     loaded = LOAD_VARIANTS(ingested.parquet)
     load_barrier = loaded.receipt.collect()
     sites = EXPORT_NOVEL_SITES(load_barrier, references)
-    af = ANNOTATE_AF(sites.vcf, references)
+    af_raw = ANNOTATE_AF(sites.vcf, references)
+    af = NORMALIZE_AF_FIELDS(af_raw.vcf, references)
     clinvar = ANNOTATE_CLINVAR(af.vcf, references)
     spliceai = ANNOTATE_SPLICEAI(clinvar.vcf, clinvar.index, references)
     base = ANNOTATE_LOCAL_CSQ(spliceai.vcf, spliceai.index, references)
-    selected = SELECT_DETAIL_SITES(base.vcf, base.index)
+    rescue = ADD_RESCUE_FIELDS(base.vcf, base.index)
+    selected = SELECT_DETAIL_SITES(rescue.vcf, rescue.index)
     vep = ANNOTATE_DETAIL_VEP(selected.vcf, selected.index, selected.metrics, references)
-    detail = INDEX_DETAIL_VCF(vep.vcf)
+    detail = INDEX_DETAIL_VCF(vep.vcf, selected.metrics)
     annotation_load = LOAD_ANNOTATIONS(base.vcf, detail.vcf)
     COLLECT_RESULTS(base.vcf, base.index, detail.vcf, detail.index,
                     selected.metrics, annotation_load.receipt, sites.metrics)

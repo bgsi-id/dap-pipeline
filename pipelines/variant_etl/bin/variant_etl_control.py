@@ -269,7 +269,9 @@ def parse_base_info(info: dict[str, str]):
         if val and val != ".":
             attributes[key.lower()] = val
     return {
-        "gnomad_af": nullable_float(info.get("gnomad_af")),
+        # The prepared gnomAD archive exposes the cohort maximum as its primary
+        # AF. Preserve the public gnomad_af field while retaining the source name.
+        "gnomad_af": nullable_float(info.get("gnomad_af") or info.get("gnomad_af_max")),
         "gnomad_af_max": nullable_float(info.get("gnomad_af_max")),
         "gnomad_af_popmax": nullable_float(
             info.get("gnomad_af_popmax") or info.get("gnomad_popmax_af") or info.get("popmax_af")
@@ -517,6 +519,8 @@ ENGINE = ReplacingMergeTree(annotated_at) ORDER BY (annotation_pack, variant_id)
 ENGINE = ReplacingMergeTree(completed_at) ORDER BY (annotation_pack, variant_id)""",
     ]
     base_columns = {
+        "gnomad_af": "Nullable(Float64)",
+        "gnomad_af_max": "Nullable(Float64)",
         "gnomad_af_popmax": "Nullable(Float64)",
         "gnomad_nhomalt": "Nullable(UInt32)",
         "clinvar_sig": "Array(String)",
@@ -531,9 +535,12 @@ ENGINE = ReplacingMergeTree(completed_at) ORDER BY (annotation_pack, variant_id)
         "attributes": "Map(String, String)",
     }
     detail_columns = {
+        "hgnc": "Nullable(String)",
         "hgnc_id": "Nullable(String)",
+        "vep_consequence": "Array(String)",
         "vep_impact": "Nullable(String)",
         "vep_sift": "Nullable(String)",
+        "vep_polyphen": "Nullable(String)",
         "vep_transcript_id": "Nullable(String)",
         "vep_hgvsc": "Nullable(String)",
         "vep_hgvsp": "Nullable(String)",

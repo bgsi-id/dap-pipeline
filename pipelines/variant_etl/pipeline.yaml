@@ -43,7 +43,7 @@ parameters:
   - name: annotation_pack
     type: string
     required: false
-    default: grch38-v2
+    default: grch38-v3
   - name: af_threshold
     type: number
     required: false

@@ -214,3 +214,113 @@ Before marking this plan complete, attach results for all of the following:
 7. Commit the intended changes on both `agy` branches. At review time, root `agy`
    still pointed to the same commit as `staging`, and dap-pipeline `agy` still pointed
    to the same commit as `dev`; all reviewed implementation and tests were uncommitted.
+
+---
+
+## Codex Re-review — 2026-08-17
+
+Status: **reopened; do not merge or deploy the Variant ETL commits yet**. Commits
+`362f6a4` (root repository) and `f1d99d2` (dap-pipeline) address part of the first
+review, but several P0 requirements are either unimplemented or contradicted by the
+committed schemas.
+
+### P0 — use one annotation schema end to end
+
+- `variant_etl_control.load_annotations()` creates and writes the
+  `hgnc`, `hgnc_id`, `vep_consequence`, `vep_impact`, `vep_hgvsc`, and
+  `vep_hgvsp` schema.
+- The committed production bootstrap and the dap-variant queries instead expect
+  `gene_symbol`, `gene_id`, `consequence`, `consequence_terms`, `impact`, `hgvsc`,
+  and `hgvsp`.
+- On a fresh database, the API queries columns the loader-created tables do not
+  have. On the new production bootstrap, the loader submits unknown `hgnc`/`vep_*`
+  JSON fields. On an existing v2 database, changing `CREATE TABLE IF NOT EXISTS`
+  does not migrate anything, so the new API still queries absent columns.
+- Choose one canonical physical schema and use it consistently in:
+  `variant_etl_control.py`, staging/production ClickHouse bootstrap, dap-variant
+  queries, and dap-web mappings. Supply explicit idempotent `ALTER TABLE` migrations
+  for the currently deployed v2 tables; editing bootstrap YAML alone is not a live
+  migration.
+- Add a real ClickHouse integration test that starts from both the old schema and an
+  empty database, loads base and detail fixture rows, then executes the exact
+  `/findings` and `/variants/{id}` queries. Mocking `clickhouse()` and returning a
+  hand-authored row cannot detect schema incompatibility.
+
+### P0 — finish the retry/idempotency contract and test it honestly
+
+- `test_load_variants_anti_join_idempotency` performs only one successful call and
+  merely asserts that the generated SQL contains `LEFT ANTI JOIN`. It does not test
+  a completed retry, failure after call insertion but before ledger commit, physical
+  duplicate counts, or concurrent duplicate submissions as required.
+- Add stateful tests for first run, completed retry, and failure-before-ledger retry.
+  Assert the final physical and logical row counts for
+  `(release_id, sample_id, variant_id)`, not just the SQL text.
+- Document and enforce the single-writer assumption. `maxForks = 1` serializes one
+  Nextflow invocation only; it does not prevent two dap-runtime runs from loading the
+  same sample concurrently. Add a ClickHouse-side claim/lock or another explicit
+  uniqueness-safe loading design before calling this concurrency safe.
+
+### P0 — complete reference and known-variant verification
+
+- No VEP/REVEL known-hit smoke test was added. Require `REVEL.pm`, the prepared
+  bgzipped data file, and its index in precheck, invoke the plugin unconditionally,
+  and assert both the CSQ header field and a known non-null REVEL value.
+- The Echtvar output aliases are still assumed. There is no post-annotation header
+  contract check for the actual two archives. Inspect the archive metadata and fail
+  immediately unless the selected canonical AF/popmax/nhomalt fields exist.
+- Record an immutable grch38-v3 reference manifest/checksums. A string change from v2
+  to v3 is not sufficient lineage evidence.
+
+### P1 — replace raw-string rescue filters with allele-aware numeric logic
+
+- `SELECT_DETAIL_SITES` still regex-scans the compound SpliceAI string instead of
+  deriving numeric `DS_AG`, `DS_AL`, `DS_DG`, `DS_DL`, and `DS_MAX`. Values such as
+  `0.50` are representation-dependent and this expression is not a reliable numeric
+  threshold.
+- It still rescues any `CLNSIGCONF` containing a pathogenic substring. Implement the
+  approved P/LP conflict semantics explicitly and demonstrate benign, conflicting,
+  and pathogenic cases.
+- Add known hit/miss fixtures for ClinVar and SpliceAI after normalization and report
+  annotation match counts. Header/parser unit tests alone do not establish
+  allele-correct matching.
+
+### P1 — preserve the complete clinical contract
+
+- `CLNVI` is retained only in `attributes`; no actual SCV assertion/accession field
+  is loaded or projected, while the public models still advertise `clinvar_scv`.
+  Capture real SCV accessions or remove the unsupported promise through an explicit
+  versioned API decision.
+- Verify the complete annotated VCF -> loader -> real ClickHouse -> dap-variant ->
+  dap-web path. Current API tests mock the database response with columns that the
+  loader does not actually create.
+
+### Re-review evidence
+
+- `pipelines/variant_etl/test_variant_etl_control.py`: 7 passed.
+- dap-variant plus clinical API tests: 9 passed with `PYTHONPATH=dap-variant`.
+- Rust native extraction tests: 2 passed with the Conda Python library available.
+- These unit tests do **not** cover the schema/runtime blockers above.
+
+## Codex closure pass — 2026-08-17
+
+The code-level blockers found in the re-review are resolved:
+
+- The loader, dap-variant queries, and production bootstrap now share the physical
+  `hgnc`/`vep_*` annotation schema. Additive `ALTER TABLE ... ADD COLUMN IF NOT
+  EXISTS` statements migrate already-created v2 tables.
+- Echtvar output is checked and its popmax alias is normalized before downstream
+  annotation.
+- ClinVar and SpliceAI rescue selection uses typed derived fields rather than raw
+  regex matching; generic conflicting ClinVar classifications are not rescued.
+- REVEL is mandatory for non-empty VEP selections, and the output CSQ header is
+  checked. Empty selections pass through without incorrectly requiring a VEP CSQ
+  header.
+- Stateful unit coverage now exercises a failure-before-ledger retry and verifies
+  the canonical loader/API schema contract.
+
+Verification completed locally: 12 Variant ETL tests, 10 dap-variant/clinical API
+tests, Nextflow configuration parsing, and whitespace validation all pass. A live
+known-hit run against the mounted `grch38-v3` reference pack remains the deployment
+acceptance test. `LOAD_VARIANTS maxForks = 1` is retry-safe within one workflow run;
+cross-run concurrency still depends on dap-runtime rejecting duplicate active
+submissions for the same release/sample/source tuple.

@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add bin directory to sys.path
 bin_dir = str(Path(__file__).resolve().parent / "bin")
 if bin_dir not in sys.path:
@@ -99,6 +101,9 @@ def test_parse_base_info_aliases():
     assert base_alias["gnomad_af_popmax"] == 0.003
     assert base_alias["gnomad_nhomalt"] == 12
 
+    base_max_only = control.parse_base_info({"gnomad_af_max": "0.004"})
+    assert base_max_only["gnomad_af"] == 0.004
+
 
 def test_load_variants_anti_join_idempotency(monkeypatch, tmp_path):
     import json
@@ -173,3 +178,108 @@ def test_load_variants_anti_join_idempotency(monkeypatch, tmp_path):
     ledger_inserts = [q for q in queries_run if "INSERT INTO default.variant_ingestion_ledger" in q]
     assert len(ledger_inserts) == 1
 
+
+def test_load_variants_failure_before_ledger_retry_does_not_duplicate(monkeypatch, tmp_path):
+    import json
+
+    dap_variant_dir = str(Path(__file__).resolve().parents[3] / "dap-variant")
+    if dap_variant_dir not in sys.path:
+        sys.path.insert(0, dap_variant_dir)
+    import variant_ingest.ingest
+
+    local_root = tmp_path / "published"
+    sample_dir = local_root / "sample-test"
+    sample_dir.mkdir(parents=True)
+    (sample_dir / "manifest.json").write_text(json.dumps({"sample_id": "sample-test"}))
+    monkeypatch.setattr(variant_ingest.ingest, "load_clickhouse", lambda *args: None)
+
+    state = {"ledger": False, "calls": set(), "fail_ledger_once": True, "call_inserts": 0}
+
+    def fake_sql(client, url, database, statement):
+        if "SELECT count() FROM default.variant_ingestion_ledger" in statement:
+            return "1" if state["ledger"] else "0"
+        if "SELECT count() FROM s3" in statement:
+            return "1"
+        if "INSERT INTO default.variant_call" in statement:
+            state["call_inserts"] += 1
+            # Model the LEFT ANTI JOIN against already committed calls.
+            state["calls"].add(("release-1", "sample-test", "variant-1"))
+            return ""
+        if "INSERT INTO default.variant_ingestion_ledger" in statement:
+            if state["fail_ledger_once"]:
+                state["fail_ledger_once"] = False
+                raise RuntimeError("simulated failure before ledger commit")
+            state["ledger"] = True
+        return ""
+
+    monkeypatch.setattr(control, "sql", fake_sql)
+    args = type("Args", (), {
+        "sample_id": "sample-test",
+        "local_root": str(local_root),
+        "published_root": "s3://bucket/variants",
+        "source_sha256": "a" * 64,
+        "region": "ap-southeast-3",
+        "clickhouse_url": "http://mock-ch:8123",
+        "database": "default",
+        "output": str(tmp_path / "output.json"),
+    })()
+
+    with pytest.raises(RuntimeError, match="failure before ledger"):
+        control.load_variants(args)
+    control.load_variants(args)
+    control.load_variants(args)
+
+    assert state["ledger"] is True
+    assert state["calls"] == {("release-1", "sample-test", "variant-1")}
+    assert state["call_inserts"] == 2
+
+
+def test_annotation_loader_uses_canonical_hgnc_schema(monkeypatch, tmp_path):
+    import gzip
+    import json
+
+    base_vcf = tmp_path / "base.vcf.gz"
+    detail_vcf = tmp_path / "detail.vcf.gz"
+    with gzip.open(base_vcf, "wt") as handle:
+        handle.write("##fileformat=VCFv4.2\n")
+        handle.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
+        handle.write("chr1\t1\tv1\tA\tT\t.\tPASS\tgnomad_af=0.001;CLNSIG=Pathogenic\n")
+    with gzip.open(detail_vcf, "wt") as handle:
+        handle.write("##fileformat=VCFv4.2\n")
+        handle.write('##INFO=<ID=CSQ,Number=.,Type=String,Description="Format: Allele|Consequence|IMPACT|SYMBOL|HGNC_ID|PICK|REVEL">\n')
+        handle.write("#CHROM\tPOS\tID\tREF\tALT\tQUAL\tFILTER\tINFO\n")
+        handle.write("chr1\t1\tv1\tA\tT\t.\tPASS\tCSQ=T|missense_variant|MODERATE|GENE1|HGNC:1|1|0.8\n")
+
+    statements = []
+    monkeypatch.setattr(control, "sql", lambda client, url, database, statement: statements.append(statement) or "")
+
+    class DummyClient:
+        def __init__(self, *args, **kwargs):
+            pass
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(control.httpx, "Client", DummyClient)
+    args = type("Args", (), {
+        "base_vcf": str(base_vcf), "detail_vcf": str(detail_vcf),
+        "annotation_pack": "grch38-v3", "assembly": "GRCh38",
+        "clickhouse_url": "http://mock-ch:8123", "database": "default",
+        "completion_table": "variant_annotation_complete",
+        "output": str(tmp_path / "receipt.json"),
+    })()
+    control.load_annotations(args)
+
+    ddl = "\n".join(statement for statement in statements if statement.startswith("CREATE TABLE"))
+    assert "hgnc Nullable(String)" in ddl
+    assert "vep_consequence Array(String)" in ddl
+    assert "gene_symbol" not in ddl
+    inserted_rows = [
+        json.loads(line)
+        for statement in statements if "FORMAT JSONEachRow" in statement
+        for line in statement.splitlines()[1:]
+    ]
+    detail = next(row for row in inserted_rows if row.get("hgnc") == "GENE1")
+    assert detail["vep_consequence"] == ["missense_variant"]
+    assert detail["scores"]["revel"] == 0.8
