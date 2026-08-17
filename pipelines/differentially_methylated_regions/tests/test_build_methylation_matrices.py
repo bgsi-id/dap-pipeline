@@ -5,6 +5,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = Path(__file__).parents[1] / "bin" / "build_methylation_matrices.py"
 SPEC = importlib.util.spec_from_file_location("build_methylation_matrices", SCRIPT)
@@ -86,3 +88,38 @@ def test_emits_raw_dss_counts_and_beta_matrix(tmp_path, monkeypatch):
         "0.86363636",
         "0.88888889",
     ]
+
+
+def test_build_matrices_fail_closed_if_output_exists(tmp_path, monkeypatch):
+    """Verifies that build_methylation_matrices fails if output directory already exists."""
+    inputs = [
+        write_prepared_sample(tmp_path, "C1", "control", 20, 2),
+        write_prepared_sample(tmp_path, "C2", "control", 22, 3),
+        write_prepared_sample(tmp_path, "C3", "control", 18, 1),
+        write_prepared_sample(tmp_path, "P1", "patient", 20, 18),
+        write_prepared_sample(tmp_path, "P2", "patient", 22, 19),
+        write_prepared_sample(tmp_path, "P3", "patient", 18, 16),
+    ]
+    output = tmp_path / "matrices"
+    output.mkdir()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            str(SCRIPT),
+            "--inputs",
+            *map(str, inputs),
+            "--output",
+            str(output),
+            "--min-coverage",
+            "5",
+            "--min-sample-fraction",
+            "1",
+            "--min-samples-per-cohort",
+            "3",
+        ],
+    )
+
+    with pytest.raises(FileExistsError):
+        MODULE.main()
