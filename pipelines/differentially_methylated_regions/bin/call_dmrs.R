@@ -322,9 +322,27 @@ generate_profile_plots <- function(out, partition, data, dss_results) {
   )
 
   if (nrow(dmr_calls)) {
-    png(file.path(out, 'top-dmr-dss.png'), width = 1400, height = 800, res = 140)
-    DSS::showOneDMR(dmr_calls[1, , drop = FALSE], bs_object)
+    # showOneDMR uses one vertical panel per sample. A fixed-height device can
+    # leave each panel smaller than its margins and abort the entire analysis.
+    dss_plot <- file.path(out, 'top-dmr-dss.png')
+    dss_plot_height <- min(16000L, max(1200L, 240L * ncol(bs_object)))
+    png(dss_plot, width = 1400, height = dss_plot_height, res = 140)
+    dss_plot_error <- tryCatch(
+      {
+        DSS::showOneDMR(dmr_calls[1, , drop = FALSE], bs_object)
+        NULL
+      },
+      error = function(error) error
+    )
     dev.off()
+    if (!is.null(dss_plot_error)) {
+      warning('Unable to render DSS per-sample diagnostic: ', conditionMessage(dss_plot_error))
+      png(dss_plot, width = 1400, height = 800, res = 140)
+      plot.new()
+      text(.5, .55, 'DSS per-sample diagnostic is unavailable', cex = 1.2)
+      text(.5, .45, conditionMessage(dss_plot_error), cex = .9, col = '#666666')
+      dev.off()
+    }
 
     top <- dmr_calls[1, , drop = FALSE]
     in_top <- data$probes$chrom == top$chr[[1]] &
