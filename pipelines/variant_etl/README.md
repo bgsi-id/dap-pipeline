@@ -22,6 +22,12 @@ The deployment injects the trusted private `variant_image` and release ID. They
 are not user-visible workflow parameters. The other tool images are public and
 pinned in `nextflow.config`.
 
+`annotation_pack` is the output annotation lineage, not a storage-directory
+name. For example, `grch38-v3` intentionally consumes the stable `/reference`
+mount currently backed by the deployment's `grch38-v1/` reference collection.
+Changing annotation logic does not require copying unchanged reference assets
+into a new directory.
+
 No process invokes `aws s3`, lists a bucket or embeds a bucket name. nf-amazon
 stages VCF inputs and publishes Parquet/VCF outputs. ClickHouse reads an exact
 published Parquet prefix using its own workload identity.

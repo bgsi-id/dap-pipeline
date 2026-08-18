@@ -75,18 +75,34 @@ process PRECHECK_REFERENCES {
     script:
     """
     set -euo pipefail
-    test -s '${params.reference_dir}/${params.fasta_name}'
-    test -s '${params.reference_dir}/${params.fasta_name}.fai'
-    test -s '${params.reference_dir}/${params.gff_name}'
-    test -s '${params.reference_dir}/${params.gnomad_name}'
-    test -s '${params.reference_dir}/${params.gnomad_popmax_name}'
-    test -s '${params.reference_dir}/${params.clinvar_name}'
-    test -s '${params.reference_dir}/${params.clinvar_name}.tbi' -o -s '${params.reference_dir}/${params.clinvar_name}.csi'
-    test -s '${params.reference_dir}/${params.spliceai_name}'
-    test -s '${params.reference_dir}/${params.spliceai_name}.tbi' -o -s '${params.reference_dir}/${params.spliceai_name}.csi'
-    test -s '${params.reference_dir}/${params.revel_name}'
-    test -s '${params.reference_dir}/${params.revel_name}.tbi'
-    test -d '${params.vep_cache_dir}/homo_sapiens_merged/${params.vep_cache_version}_GRCh38'
+    require_file() {
+      if [ ! -s "\$1" ]; then
+        echo "Missing required annotation reference: \$1" >&2
+        exit 1
+      fi
+    }
+    require_index() {
+      if [ ! -s "\$1.tbi" ] && [ ! -s "\$1.csi" ]; then
+        echo "Missing tabix/CSI index for annotation reference: \$1" >&2
+        exit 1
+      fi
+    }
+
+    require_file '${params.reference_dir}/${params.fasta_name}'
+    require_file '${params.reference_dir}/${params.fasta_name}.fai'
+    require_file '${params.reference_dir}/${params.gff_name}'
+    require_file '${params.reference_dir}/${params.gnomad_name}'
+    require_file '${params.reference_dir}/${params.gnomad_popmax_name}'
+    require_file '${params.reference_dir}/${params.clinvar_name}'
+    require_index '${params.reference_dir}/${params.clinvar_name}'
+    require_file '${params.reference_dir}/${params.spliceai_name}'
+    require_index '${params.reference_dir}/${params.spliceai_name}'
+    require_file '${params.reference_dir}/${params.revel_name}'
+    require_file '${params.reference_dir}/${params.revel_name}.tbi'
+    if [ ! -d '${params.vep_cache_dir}/homo_sapiens_merged/${params.vep_cache_version}_GRCh38' ]; then
+      echo 'Missing required VEP cache: ${params.vep_cache_dir}/homo_sapiens_merged/${params.vep_cache_version}_GRCh38' >&2
+      exit 1
+    fi
     printf 'annotation_pack\t%s\nassembly\t%s\n' '${params.annotation_pack}' '${params.assembly}' > reference.ready
     """
 }
