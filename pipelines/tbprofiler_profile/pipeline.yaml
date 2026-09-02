@@ -1,0 +1,48 @@
+schema_version: "1.0"
+id: tbprofiler-profile
+name: TB-Profiler resistance and lineage profiling
+version: 0.1.0
+description: >-
+  Detect Mycobacterium tuberculosis drug resistance and lineage from
+  paired- or single-end WGS FASTQ with TB-Profiler.
+engine: nextflow
+engine_version: 26.04.6
+workflow_type: NFL
+workflow_type_version: DSL2
+entrypoint: main.nf
+tags: [nextflow, tuberculosis, tbprofiler, resistance, lineage, wgs]
+estimate: "Input-dependent; profiling scales horizontally by sample"
+token_estimate: 5
+execution:
+  preferred_location: alor
+  compute_profiles: [standard]
+inputs:
+  - role: fastq_r1
+    label: Forward (or single-end) WGS FASTQ
+    parameter: reads_r1
+    required: true
+  - role: fastq_r2
+    label: Reverse WGS FASTQ (paired-end only)
+    parameter: reads_r2
+    required: false
+data_input:
+  contract: dap-pack-manifest/v1
+  accepted_pack_kinds: [dataset, cohort]
+  required_assets:
+    - role: fastq_r1
+      scope: sample
+      required: true
+    - role: fastq_r2
+      scope: sample
+      required: false
+parameters:
+  - name: batch_id
+    type: string
+    required: true
+outputs:
+  - {name: bam, path: "results/*/bam/*.bam", media_type: application/octet-stream}
+  - {name: vcf, path: "results/*/vcf/*.vcf.gz", media_type: application/gzip}
+  - {name: json, path: "results/*/results/*.json", media_type: application/json}
+  - {name: csv, path: "results/*/results/*.csv", media_type: text/csv}
+  - {name: txt, path: "results/*/results/*.txt", media_type: text/plain}
+  - {name: run, path: results/run.json, media_type: application/json}

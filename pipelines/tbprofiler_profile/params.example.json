@@ -1,0 +1,5 @@
+{
+  "dap_input_manifest": "/wes/inputs/resolved-inputs.json",
+  "dap_output_uri": "s3://example-workdir/tbprofiler/runs/tb-batch-01",
+  "batch_id": "tb-batch-01"
+}
