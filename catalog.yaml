@@ -20,3 +20,7 @@ pipelines:
     path: pipelines/differentially_methylated_regions
     descriptor: pipelines/differentially_methylated_regions/pipeline.yaml
     active: true
+  - id: tbprofiler-profile
+    path: pipelines/tbprofiler_profile
+    descriptor: pipelines/tbprofiler_profile/pipeline.yaml
+    active: true
