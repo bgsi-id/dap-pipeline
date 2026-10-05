@@ -13,6 +13,12 @@ built or deployed from here: DAP runs the Nextflow workflows pinned to a full Gi
 | `discover-images` | Lists every container image the pipelines reference (`.github/scripts/list_images.py`) | yes (a malformed reference fails) |
 | `image-scan` | One Trivy scan per image; report artifact, step summary table, DefectDojo import | **no** for now (`non-blocking: true`) |
 
+## Order
+
+`validate`, `tests` and the three `security / ...` jobs run in parallel. `discover-images` and then
+`image-scan` start only when all five have passed, as in `dap-platform`. The weekly schedule skips the
+five (the code did not change) and runs `discover-images` and `image-scan` directly.
+
 ## Triggers
 
 Pull requests to `dev`, pushes to `dev`, manual runs, and a weekly run (Monday 02:00 UTC) that only

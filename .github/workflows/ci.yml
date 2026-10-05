@@ -342,8 +342,17 @@ jobs:
           exit 1
 
   # ----------------------------------------------------- discover-images
+  # Runs only after every gate has passed, like dap-platform's test -> security ->
+  # scan order, so image findings are not imported for a change that already fails.
+  # The weekly schedule skips the gates (nothing changed in the code) and still runs.
   discover-images:
     name: discover container images
+    needs: [validate, tests, sonarqube-sast, semgrep-sast, trivy-sca]
+    if: >-
+      ${{ !cancelled() && (github.event_name == 'schedule' ||
+      (needs.validate.result == 'success' && needs.tests.result == 'success' &&
+      needs.sonarqube-sast.result == 'success' && needs.semgrep-sast.result == 'success' &&
+      needs.trivy-sca.result == 'success')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
@@ -365,7 +374,7 @@ jobs:
   image-scan:
     name: image-scan (${{ matrix.name }})
     needs: discover-images
-    if: needs.discover-images.outputs.count != '0'
+    if: needs.discover-images.result == 'success' && needs.discover-images.outputs.count != '0'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
