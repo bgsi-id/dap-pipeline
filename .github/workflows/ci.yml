@@ -5,9 +5,11 @@ name: CI
 # pipelines reference, with findings in DefectDojo. Nothing is built or deployed
 # from this repository. See docs/ci.md for triggers, gates, baseline and rollback.
 #
-# PINNING: the `uses: bgsi-id/devsecsops_github/...@<sha>` lines are pinned to an
-# exact commit on the central repository's main branch. Re-pin them deliberately
-# when the central workflows change.
+# SELF-CONTAINED ON PURPOSE: this repository is public and the central
+# bgsi-id/devsecsops_github workflows are private, and GitHub does not let a public
+# repository call reusable workflows from a private one. The scan logic is therefore
+# inlined here; it mirrors the central security-pipeline.yml and
+# image-scan-digest-pipeline.yml. Keep the two in step by hand.
 #
 # No top-level `paths:` filter on purpose: check names must also be reported on
 # documentation-only pull requests. Never use `pull_request_target` here: this
@@ -33,6 +35,14 @@ concurrency:
 env:
   # Flip to "true" (a reviewed change) once every image is pinned to a digest.
   ENFORCE_DIGEST_PINS: "false"
+  # Image scans only report until the baseline is reviewed. Set to "false" to gate.
+  IMAGE_SCAN_NON_BLOCKING: "true"
+  DEFECTDOJO_URL: https://devsecops.bbbinomika.id
+  DEFECTDOJO_PRODUCT: dap-pipeline
+  DEFECTDOJO_PRODUCT_TYPE: Research and Development
+  REPORT_RETENTION_DAYS: "7"
+  # Fork and Dependabot pull requests never receive secrets.
+  TRUSTED: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]') }}
 
 jobs:
   # ------------------------------------------------------------ validate
@@ -80,17 +90,255 @@ jobs:
           pipelines/variant_etl/test_variant_etl_control.py::test_load_variants_anti_join_idempotency
           pipelines/variant_etl/test_variant_etl_control.py::test_load_variants_failure_before_ledger_retry_does_not_duplicate
 
-  # ------------------------------------------------------------ security
-  # SonarQube SAST + Semgrep SAST + Trivy filesystem SCA (secrets included).
-  security:
-    name: security
+  # ------------------------------------------------------ SAST: SonarQube
+  sonarqube-sast:
+    name: security / SonarQube SAST
     if: github.event_name != 'schedule'
-    uses: bgsi-id/devsecsops_github/.github/workflows/security-pipeline.yml@1f4f74466b6b9a26291b4175819f20ca44282038 # main
-    with:
-      branches: '["dev"]'
-    secrets:
-      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-      DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      PROJECT_KEY: dap-pipeline
+    steps:
+      - name: Skip notice for pull requests without secrets
+        if: env.TRUSTED != 'true'
+        run: echo "::warning title=SonarQube skipped::This pull request has no access to SONAR_TOKEN. Re-run the change from a branch in this repository."
+
+      - uses: actions/checkout@v6
+        if: env.TRUSTED == 'true'
+        with:
+          fetch-depth: 0
+
+      - name: Validate SonarQube and DefectDojo configuration
+        if: env.TRUSTED == 'true'
+        env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Workflow logs are public: keep the internal host name out of them.
+          [ -n "${SONAR_HOST_URL:-}" ] && echo "::add-mask::${SONAR_HOST_URL}"
+          for name in SONAR_HOST_URL SONAR_TOKEN DEFECTDOJO_TOKEN; do
+            if [ -z "${!name:-}" ]; then
+              echo "::error::${name} is empty or unavailable to this repository."
+              exit 1
+            fi
+          done
+
+      # On pull requests the SonarQube PR plugin can leave the base branch empty,
+      # so key/branch/base are passed explicitly. The base branch (dev) must
+      # already have a branch analysis, which its first push run provides.
+      # A failing quality gate must not hide the report: enforced by the last step.
+      - name: Run SonarQube scan
+        id: scan
+        if: env.TRUSTED == 'true'
+        continue-on-error: true
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.projectKey=${{ env.PROJECT_KEY }}
+            -Dsonar.projectName=${{ env.PROJECT_KEY }}
+            -Dsonar.sources=.
+            -Dsonar.projectVersion=${{ github.sha }}
+            "-Dsonar.buildString=Commit ${{ github.sha }}"
+            -Dsonar.qualitygate.wait=true
+            ${{ github.event_name == 'pull_request' && format('-Dsonar.pullrequest.key={0} -Dsonar.pullrequest.branch={1} -Dsonar.pullrequest.base={2}', github.event.number, github.head_ref, github.base_ref) || '' }}
+
+      - name: Fetch SonarQube issues report
+        if: env.TRUSTED == 'true'
+        env:
+          SONAR_HOST_URL: ${{ vars.SONAR_HOST_URL }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::${SONAR_HOST_URL}"
+          curl -sS --fail-with-body -u "${SONAR_TOKEN}:" --get \
+            --data-urlencode "componentKeys=${PROJECT_KEY}" \
+            --data-urlencode "ps=500" \
+            "${SONAR_HOST_URL%/}/api/issues/search" -o sonarqube-results.json
+          if ! jq -e '.issues | type == "array"' sonarqube-results.json >/dev/null; then
+            echo "::error::SonarQube returned an empty or invalid issues report."
+            exit 1
+          fi
+
+      - name: Upload SonarQube report artifact
+        if: always() && env.TRUSTED == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: sonarqube-results
+          path: sonarqube-results.json
+          if-no-files-found: ignore
+          retention-days: ${{ env.REPORT_RETENTION_DAYS }}
+
+      - name: Upload SonarQube results to DefectDojo
+        if: env.TRUSTED == 'true'
+        env:
+          DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          BRANCH_NAME="${HEAD_REF:-${GITHUB_REF_NAME}}"
+          curl -sS --fail-with-body -X POST "${DEFECTDOJO_URL%/}/api/v2/import-scan/" \
+            -H "Authorization: Token ${DEFECTDOJO_TOKEN}" \
+            -F "active=true" -F "verified=true" \
+            -F "scan_type=SonarQube Scan" \
+            -F "minimum_severity=Medium" \
+            -F "engagement_name=Branch: ${BRANCH_NAME}" \
+            -F "test_title=Commit ${GITHUB_SHA:0:8} ($(TZ='Asia/Jakarta' date +'%d/%m/%Y %H:%M WIB'))" \
+            -F "product_name=${DEFECTDOJO_PRODUCT}" \
+            -F "product_type_name=${DEFECTDOJO_PRODUCT_TYPE}" \
+            -F "auto_create_context=true" \
+            -F "close_old_findings=true" \
+            -F "file=@sonarqube-results.json"
+
+      - name: Enforce SonarQube quality gate
+        if: always() && steps.scan.outcome == 'failure'
+        run: |
+          echo "::error::SonarQube analysis or its quality gate failed. The report was still uploaded; see the SonarQube project '${PROJECT_KEY}'."
+          exit 1
+
+  # -------------------------------------------------------- SAST: Semgrep
+  semgrep-sast:
+    name: security / Semgrep SAST
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Run Semgrep scan (JSON report)
+        run: |
+          set -euo pipefail
+          docker run --rm -v "${GITHUB_WORKSPACE}:/src" --workdir /src \
+            semgrep/semgrep:latest \
+            semgrep scan --config auto --json -o semgrep-results.json .
+          if ! jq -e '.results | type == "array"' semgrep-results.json >/dev/null; then
+            echo "::error::Semgrep report is missing or invalid; refusing to report success."
+            exit 1
+          fi
+
+      - name: Count ERROR severity findings
+        id: gate
+        run: |
+          set -euo pipefail
+          count="$(jq '[.results[] | select(.extra.severity == "ERROR")] | length' semgrep-results.json)"
+          echo "blocking=${count}" >> "$GITHUB_OUTPUT"
+          echo "Semgrep ERROR findings: ${count}"
+
+      - name: Upload Semgrep report artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: semgrep-results
+          path: semgrep-results.json
+          if-no-files-found: ignore
+          retention-days: ${{ env.REPORT_RETENTION_DAYS }}
+
+      - name: Upload Semgrep results to DefectDojo
+        if: env.TRUSTED == 'true'
+        env:
+          DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${DEFECTDOJO_TOKEN:-}" ] || { echo "::error::DEFECTDOJO_TOKEN is empty or unavailable."; exit 1; }
+          BRANCH_NAME="${HEAD_REF:-${GITHUB_REF_NAME}}"
+          curl -sS --fail-with-body -X POST "${DEFECTDOJO_URL%/}/api/v2/import-scan/" \
+            -H "Authorization: Token ${DEFECTDOJO_TOKEN}" \
+            -F "active=true" -F "verified=true" \
+            -F "scan_type=Semgrep JSON Report" \
+            -F "minimum_severity=Medium" \
+            -F "engagement_name=Branch: ${BRANCH_NAME}" \
+            -F "test_title=Commit ${GITHUB_SHA:0:8} ($(TZ='Asia/Jakarta' date +'%d/%m/%Y %H:%M WIB'))" \
+            -F "product_name=${DEFECTDOJO_PRODUCT}" \
+            -F "product_type_name=${DEFECTDOJO_PRODUCT_TYPE}" \
+            -F "auto_create_context=true" \
+            -F "close_old_findings=true" \
+            -F "file=@semgrep-results.json"
+
+      - name: Fail on ERROR severity findings
+        if: always() && steps.gate.outputs.blocking != '0'
+        env:
+          BLOCKING: ${{ steps.gate.outputs.blocking }}
+        run: |
+          echo "::error::Semgrep reported ${BLOCKING:-an unknown number of} ERROR severity finding(s) (or the gate could not be evaluated)."
+          exit 1
+
+  # ------------------------------------------------- SCA: Trivy filesystem
+  trivy-sca:
+    name: security / Trivy SCA (filesystem)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      SEVERITIES: CRITICAL,HIGH
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Trivy filesystem scan
+        run: |
+          set -euo pipefail
+          docker run --rm -v "${GITHUB_WORKSPACE}:/src" --workdir /src \
+            aquasec/trivy:latest fs --format json --output trivy-results.json .
+          # Trivy omits `Results` when nothing was found, so validate the schema marker.
+          if ! jq -e '.SchemaVersion != null' trivy-results.json >/dev/null; then
+            echo "::error::Trivy report was not generated, is empty, or is invalid."
+            exit 1
+          fi
+
+      - name: Count gated findings
+        id: gate
+        run: |
+          set -euo pipefail
+          count="$(jq --arg sev "${SEVERITIES}" '
+            ($sev | split(",")) as $s
+            | [.Results[]? | (.Vulnerabilities[]?, .Secrets[]?)
+               | select(.Severity | IN($s[]))]
+            | length' trivy-results.json)"
+          echo "blocking=${count}" >> "$GITHUB_OUTPUT"
+          echo "Trivy findings at ${SEVERITIES}: ${count}"
+
+      - name: Upload Trivy report artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: trivy-fs-results
+          path: trivy-results.json
+          if-no-files-found: ignore
+          retention-days: ${{ env.REPORT_RETENTION_DAYS }}
+
+      - name: Upload Trivy results to DefectDojo
+        if: env.TRUSTED == 'true'
+        env:
+          DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+          [ -n "${DEFECTDOJO_TOKEN:-}" ] || { echo "::error::DEFECTDOJO_TOKEN is empty or unavailable."; exit 1; }
+          BRANCH_NAME="${HEAD_REF:-${GITHUB_REF_NAME}}"
+          curl -sS --fail-with-body -X POST "${DEFECTDOJO_URL%/}/api/v2/import-scan/" \
+            -H "Authorization: Token ${DEFECTDOJO_TOKEN}" \
+            -F "active=true" -F "verified=true" \
+            -F "scan_type=Trivy Scan" \
+            -F "minimum_severity=Medium" \
+            -F "engagement_name=Branch: ${BRANCH_NAME}" \
+            -F "test_title=Commit ${GITHUB_SHA:0:8} ($(TZ='Asia/Jakarta' date +'%d/%m/%Y %H:%M WIB'))" \
+            -F "product_name=${DEFECTDOJO_PRODUCT}" \
+            -F "product_type_name=${DEFECTDOJO_PRODUCT_TYPE}" \
+            -F "auto_create_context=true" \
+            -F "close_old_findings=true" \
+            -F "file=@trivy-results.json"
+
+      - name: Fail on gated findings
+        if: always() && steps.gate.outputs.blocking != '0'
+        env:
+          BLOCKING: ${{ steps.gate.outputs.blocking }}
+        run: |
+          echo "::error::Trivy reported ${BLOCKING:-an unknown number of} ${SEVERITIES} finding(s) (or the gate could not be evaluated)."
+          exit 1
 
   # ----------------------------------------------------- discover-images
   discover-images:
@@ -110,21 +358,196 @@ jobs:
         run: python .github/scripts/list_images.py .
 
   # ---------------------------------------------------------- image-scan
+  # One Trivy scan per image. Images are resolved once to the linux/amd64
+  # manifest digest and read straight from the registry (no Docker daemon
+  # storage), so large images do not fill the runner disk.
   image-scan:
     name: image-scan (${{ matrix.name }})
     needs: discover-images
     if: needs.discover-images.outputs.count != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       max-parallel: 4
       matrix:
         include: ${{ fromJson(needs.discover-images.outputs.images) }}
-    uses: bgsi-id/devsecsops_github/.github/workflows/image-scan-registry-pipeline.yml@1f4f74466b6b9a26291b4175819f20ca44282038 # main
-    with:
-      image-ref: ${{ matrix.image_ref }}
-      service: ${{ matrix.name }}
-      gate-ignore-unfixed: true
-      # Report-only until the baseline is reviewed; set per image afterwards.
-      non-blocking: true
-    secrets:
-      DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+    env:
+      IMAGE_REF: ${{ matrix.image_ref }}
+      SERVICE: ${{ matrix.name }}
+      SEVERITIES: CRITICAL,HIGH
+      IGNORE_UNFIXED: "true"
+    steps:
+      # The reference reaches every step through `env`, never through script
+      # interpolation, and must match a strict registry-reference pattern.
+      - name: Validate image reference
+        run: |
+          set -euo pipefail
+          re='^[A-Za-z0-9][A-Za-z0-9._-]*(:[0-9]+)?(/[A-Za-z0-9][A-Za-z0-9._-]*)*(:[A-Za-z0-9_][A-Za-z0-9_.-]{0,127})?(@sha256:[0-9a-f]{64})?$'
+          if [[ ! "${IMAGE_REF}" =~ $re ]]; then
+            echo "::error::image reference is not a valid registry image reference."
+            exit 1
+          fi
+
+      - name: Resolve image to an immutable digest
+        id: resolve
+        run: |
+          set -euo pipefail
+          command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+
+          # Fully qualify Docker Hub shorthand (python:3.12-slim -> docker.io/library/python:3.12-slim).
+          first="${IMAGE_REF%%/*}"
+          qualified="${IMAGE_REF}"
+          if [[ "${IMAGE_REF}" != */* ]]; then
+            qualified="docker.io/library/${IMAGE_REF}"
+          elif [[ "${first}" != *.* && "${first}" != *:* && "${first}" != localhost ]]; then
+            qualified="docker.io/${IMAGE_REF}"
+          fi
+          repo="${qualified%%@*}"
+          last="${repo##*/}"
+          [[ "${last}" == *:* ]] && repo="${repo%:*}"
+
+          raw=""
+          for attempt in 1 2 3; do
+            if raw="$(skopeo inspect --raw "docker://${qualified}")"; then break; fi
+            raw=""
+            echo "::warning::Manifest lookup failed (attempt ${attempt}/3)."
+            sleep $((attempt * 10))
+          done
+          [ -n "${raw}" ] || { echo "::error::Could not resolve ${IMAGE_REF} in the registry."; exit 1; }
+
+          if echo "${raw}" | jq -e '.manifests | type == "array"' >/dev/null 2>&1; then
+            digest="$(echo "${raw}" | jq -r '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")][0].digest // empty')"
+            [ -n "${digest}" ] || { echo "::error::${IMAGE_REF} has no linux/amd64 manifest."; exit 1; }
+          else
+            digest="sha256:$(printf '%s' "${raw}" | sha256sum | cut -d' ' -f1)"
+          fi
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Resolved an invalid digest."
+            exit 1
+          fi
+          echo "::notice::Scanning ${IMAGE_REF} as ${repo}@${digest}"
+          echo "scan-ref=${repo}@${digest}" >> "$GITHUB_OUTPUT"
+          echo "digest=${digest}" >> "$GITHUB_OUTPUT"
+
+      - name: Scan image with Trivy (JSON report)
+        env:
+          SCAN_REF: ${{ steps.resolve.outputs.scan-ref }}
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if docker run --rm -v "${GITHUB_WORKSPACE}:/src" --workdir /src \
+              aquasec/trivy:latest \
+              image --image-src remote --format json --output /src/trivy-image-results.json "${SCAN_REF}"; then
+              break
+            fi
+            [ "${attempt}" -lt 3 ] || { echo "::error::Trivy could not scan ${SCAN_REF} after 3 attempts (registry pull or rate limit)."; exit 1; }
+            echo "::warning::Trivy scan failed (attempt ${attempt}/3); retrying."
+            sleep $((attempt * 15))
+          done
+          if ! jq -e '.SchemaVersion != null and (.ArtifactName | type == "string")' trivy-image-results.json >/dev/null; then
+            echo "::error::Trivy image report is missing or invalid; refusing to report success."
+            exit 1
+          fi
+
+      - name: Count gated findings
+        id: gate
+        run: |
+          set -euo pipefail
+          count="$(jq --arg sev "${SEVERITIES}" --argjson ignore "${IGNORE_UNFIXED}" '
+            ($sev | split(",")) as $s
+            | [ (.Results[]? | .Vulnerabilities[]?
+                 | select(.Severity | IN($s[]))
+                 | select(($ignore | not) or ((.FixedVersion // "") != ""))),
+                (.Results[]? | .Secrets[]? | select(.Severity | IN($s[]))) ]
+            | length' trivy-image-results.json)"
+          echo "blocking=${count}" >> "$GITHUB_OUTPUT"
+          echo "Trivy image findings at ${SEVERITIES} (ignore unfixed: ${IGNORE_UNFIXED}): ${count}"
+
+      - name: Show gated findings
+        if: always()
+        env:
+          SCAN_REF: ${{ steps.resolve.outputs.scan-ref }}
+        run: |
+          set -euo pipefail
+          [ -s trivy-image-results.json ] || { echo "No Trivy report to summarize."; exit 0; }
+          rows="$(jq -r --arg sev "${SEVERITIES}" --argjson ignore "${IGNORE_UNFIXED}" '
+            ($sev | split(",")) as $s
+            | [ .Results[]? | .Vulnerabilities[]?
+                | select(.Severity | IN($s[]))
+                | select(($ignore | not) or ((.FixedVersion // "") != "")) ]
+            | sort_by([(if .Severity == "CRITICAL" then 0 else 1 end), .PkgName, .VulnerabilityID])
+            | .[]
+            | [.Severity, .PkgName, .InstalledVersion, (.FixedVersion // "-"), .VulnerabilityID, ((.Title // "") | .[0:90])]
+            | @tsv' trivy-image-results.json)"
+          total="$(jq --arg sev "${SEVERITIES}" '($sev | split(",")) as $s | [.Results[]? | .Vulnerabilities[]? | select(.Severity | IN($s[]))] | length' trivy-image-results.json)"
+          shown=0; [ -n "${rows}" ] && shown="$(printf '%s\n' "${rows}" | wc -l | tr -d ' ')"
+          ignored=$((total - shown))
+
+          echo "Trivy ${SEVERITIES} findings for ${IMAGE_REF}: ${shown} fail the gate, ${ignored} without a fix are ignored (${total} total)."
+          if [ "${shown}" -gt 0 ]; then
+            { printf 'SEVERITY\tPACKAGE\tINSTALLED\tFIXED\tCVE\tTITLE\n'; printf '%s\n' "${rows}"; } | column -t -s "$(printf '\t')"
+          fi
+
+          {
+            echo "### Trivy image scan: ${IMAGE_REF}"
+            echo
+            echo "Scanned \`${SCAN_REF}\`. Gate: ${SEVERITIES}, ignore unfixed: ${IGNORE_UNFIXED}, non-blocking: ${IMAGE_SCAN_NON_BLOCKING}. **${shown} finding(s) fail the gate**; ${ignored} without a fix are ignored (${total} total)."
+            if [ "${shown}" -gt 0 ]; then
+              echo
+              echo "| Severity | Package | Installed | Fixed | CVE | Title |"
+              echo "| --- | --- | --- | --- | --- | --- |"
+              printf '%s\n' "${rows}" | head -100 | awk -F'\t' '{gsub(/\|/,"/"); printf "| %s | %s | %s | %s | %s | %s |\n",$1,$2,$3,$4,$5,$6}'
+              [ "${shown}" -gt 100 ] && echo && echo "_Showing the first 100 of ${shown}. The full report is in the uploaded artifact and in DefectDojo._"
+            fi
+          } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+      - name: Upload Trivy image report artifact
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: trivy-image-results-${{ strategy.job-index }}
+          path: trivy-image-results.json
+          if-no-files-found: ignore
+          retention-days: ${{ env.REPORT_RETENTION_DAYS }}
+
+      - name: Upload Trivy image results to DefectDojo
+        if: always() && env.TRUSTED == 'true' && hashFiles('trivy-image-results.json') != ''
+        env:
+          DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+          HEAD_REF: ${{ github.head_ref }}
+          DIGEST: ${{ steps.resolve.outputs.digest }}
+        run: |
+          set -euo pipefail
+          [ -n "${DEFECTDOJO_TOKEN:-}" ] || { echo "::error::DEFECTDOJO_TOKEN is empty or unavailable."; exit 1; }
+          BRANCH_NAME="${HEAD_REF:-${GITHUB_REF_NAME}}"
+          curl -sS --fail-with-body -X POST "${DEFECTDOJO_URL%/}/api/v2/import-scan/" \
+            -H "Authorization: Token ${DEFECTDOJO_TOKEN}" \
+            -F "active=true" -F "verified=true" \
+            -F "scan_type=Trivy Scan" \
+            -F "minimum_severity=Medium" \
+            -F "engagement_name=Branch: ${BRANCH_NAME}" \
+            -F "test_title=${SERVICE} Image ${DIGEST:0:19} ($(TZ='Asia/Jakarta' date +'%d/%m/%Y %H:%M WIB'))" \
+            -F "product_name=${DEFECTDOJO_PRODUCT}" \
+            -F "product_type_name=${DEFECTDOJO_PRODUCT_TYPE}" \
+            -F "auto_create_context=true" \
+            -F "close_old_findings=true" \
+            -F "service=${SERVICE}" \
+            -F "file=@trivy-image-results.json"
+
+      - name: Report gated findings without failing (non-blocking)
+        if: always() && env.IMAGE_SCAN_NON_BLOCKING == 'true' && steps.gate.outputs.blocking != '' && steps.gate.outputs.blocking != '0'
+        env:
+          BLOCKING: ${{ steps.gate.outputs.blocking }}
+        run: |
+          echo "::warning title=Image would have failed the gate::${IMAGE_REF} has ${BLOCKING} ${SEVERITIES} finding(s). Image scans are non-blocking, so the job passes."
+          echo "**Would have failed the gate:** ${BLOCKING} ${SEVERITIES} finding(s) (non-blocking mode)." >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
+
+      # An unevaluable gate (no count) always fails, even in non-blocking mode.
+      - name: Fail on gated findings
+        if: always() && steps.gate.outputs.blocking != '0' && (env.IMAGE_SCAN_NON_BLOCKING != 'true' || steps.gate.outputs.blocking == '')
+        env:
+          BLOCKING: ${{ steps.gate.outputs.blocking }}
+        run: |
+          echo "::error::Trivy reported ${BLOCKING:-an unknown number of} ${SEVERITIES} finding(s) in ${IMAGE_REF} (or the gate could not be evaluated)."
+          exit 1
