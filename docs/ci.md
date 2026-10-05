@@ -51,8 +51,9 @@ is inlined in `ci.yml`. It mirrors the central `security-pipeline.yml` and
 
 ## Settings
 
-No repository settings are needed: `SONAR_TOKEN`, `DEFECTDOJO_TOKEN` and `SONAR_HOST_URL` are
-organization-level. The SonarQube project key and the DefectDojo product are both `dap-pipeline`.
+`SONAR_TOKEN`, `DEFECTDOJO_TOKEN` and `SONAR_HOST_URL` are organization-level. `DEFECTDOJO_URL` must be
+available to this repository as a **secret** (not a variable or a literal in the workflow), because logs
+are public and a secret is masked in them. The SonarQube project key and the DefectDojo product are both `dap-pipeline`.
 The organization is on the GitHub Free plan, so required checks cannot be enforced yet. When they can,
 require `validate`, `tests`, the three `security / ...` jobs and the blocking `image-scan` jobs.
 

@@ -37,7 +37,8 @@ env:
   ENFORCE_DIGEST_PINS: "false"
   # Image scans only report until the baseline is reviewed. Set to "false" to gate.
   IMAGE_SCAN_NON_BLOCKING: "true"
-  DEFECTDOJO_URL: https://devsecops.bbbinomika.id
+  # Internal host name: a secret, so it is masked in the public logs.
+  DEFECTDOJO_URL: ${{ secrets.DEFECTDOJO_URL }}
   DEFECTDOJO_PRODUCT: dap-pipeline
   DEFECTDOJO_PRODUCT_TYPE: Research and Development
   REPORT_RETENTION_DAYS: "7"
@@ -118,7 +119,7 @@ jobs:
           set -euo pipefail
           # Workflow logs are public: keep the internal host name out of them.
           [ -n "${SONAR_HOST_URL:-}" ] && echo "::add-mask::${SONAR_HOST_URL}"
-          for name in SONAR_HOST_URL SONAR_TOKEN DEFECTDOJO_TOKEN; do
+          for name in SONAR_HOST_URL SONAR_TOKEN DEFECTDOJO_TOKEN DEFECTDOJO_URL; do
             if [ -z "${!name:-}" ]; then
               echo "::error::${name} is empty or unavailable to this repository."
               exit 1
