@@ -5,9 +5,9 @@ name: CI
 # pipelines reference, with findings in DefectDojo. Nothing is built or deployed
 # from this repository. See docs/ci.md for triggers, gates, baseline and rollback.
 #
-# PINNING: the `uses: bgsi-id/devsecsops_github/...@<ref>` lines are pinned to an
-# exact commit of the central repository's feature branch. Re-pin each to a full commit
-# SHA on the central main branch after the central PR is reviewed and merged.
+# PINNING: the `uses: bgsi-id/devsecsops_github/...@<sha>` lines are pinned to an
+# exact commit on the central repository's main branch. Re-pin them deliberately
+# when the central workflows change.
 #
 # No top-level `paths:` filter on purpose: check names must also be reported on
 # documentation-only pull requests. Never use `pull_request_target` here: this
@@ -85,7 +85,7 @@ jobs:
   security:
     name: security
     if: github.event_name != 'schedule'
-    uses: bgsi-id/devsecsops_github/.github/workflows/security-pipeline.yml@09138344c2b63bc7f93238cc5e1d9c32dbb221a7 # feat/dap-reusable-workflows
+    uses: bgsi-id/devsecsops_github/.github/workflows/security-pipeline.yml@1f4f74466b6b9a26291b4175819f20ca44282038 # main
     with:
       branches: '["dev"]'
     secrets:
@@ -119,7 +119,7 @@ jobs:
       max-parallel: 4
       matrix:
         include: ${{ fromJson(needs.discover-images.outputs.images) }}
-    uses: bgsi-id/devsecsops_github/.github/workflows/image-scan-registry-pipeline.yml@52135a0af672bd15a4d0e43f722c8ea8affbbe1a # feat/dap-reusable-workflows
+    uses: bgsi-id/devsecsops_github/.github/workflows/image-scan-registry-pipeline.yml@1f4f74466b6b9a26291b4175819f20ca44282038 # main
     with:
       image-ref: ${{ matrix.image_ref }}
       service: ${{ matrix.name }}

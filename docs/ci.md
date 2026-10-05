@@ -42,6 +42,10 @@ tests, validation, Semgrep and Trivy still run.
 - The two skipped tests in `differentially_methylated_regions/tests/test_call_dmrs_container.py` need
   Docker. Their behaviour on a GitHub runner is confirmed on the first run and recorded here.
 
+## Pinning
+
+The central workflows are pinned to a full commit SHA on `devsecsops_github` main. Update the SHA in `ci.yml` deliberately when they change.
+
 ## Settings
 
 No repository settings are needed: `SONAR_TOKEN`, `DEFECTDOJO_TOKEN` and `SONAR_HOST_URL` are
