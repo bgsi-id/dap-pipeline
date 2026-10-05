@@ -498,7 +498,10 @@ jobs:
               echo "| Severity | Package | Installed | Fixed | CVE | Title |"
               echo "| --- | --- | --- | --- | --- | --- |"
               printf '%s\n' "${rows}" | head -100 | awk -F'\t' '{gsub(/\|/,"/"); printf "| %s | %s | %s | %s | %s | %s |\n",$1,$2,$3,$4,$5,$6}'
-              [ "${shown}" -gt 100 ] && echo && echo "_Showing the first 100 of ${shown}. The full report is in the uploaded artifact and in DefectDojo._"
+              if [ "${shown}" -gt 100 ]; then
+                echo
+                echo "_Showing the first 100 of ${shown}. The full report is in the uploaded artifact and in DefectDojo._"
+              fi
             fi
           } >> "${GITHUB_STEP_SUMMARY:-/dev/null}"
 
