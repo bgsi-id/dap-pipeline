@@ -73,7 +73,7 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-      - run: pip install pytest pyyaml
+      - run: pip install pytest pyyaml httpx
       # Blocking: everything except the known-failing tests below.
       - name: Run pipeline unit tests
         run: >
@@ -406,6 +406,8 @@ jobs:
           repo="${qualified%%@*}"
           last="${repo##*/}"
           [[ "${last}" == *:* ]] && repo="${repo%:*}"
+          # skopeo rejects references that carry both a tag and a digest; the digest wins.
+          [[ "${qualified}" == *@sha256:* ]] && qualified="${repo}@${qualified#*@}"
 
           raw=""
           for attempt in 1 2 3; do
@@ -497,7 +499,7 @@ jobs:
               echo
               echo "| Severity | Package | Installed | Fixed | CVE | Title |"
               echo "| --- | --- | --- | --- | --- | --- |"
-              printf '%s\n' "${rows}" | head -100 | awk -F'\t' '{gsub(/\|/,"/"); printf "| %s | %s | %s | %s | %s | %s |\n",$1,$2,$3,$4,$5,$6}'
+              printf '%s\n' "${rows}" | awk -F'\t' 'NR <= 100 {gsub(/\|/,"/"); printf "| %s | %s | %s | %s | %s | %s |\n",$1,$2,$3,$4,$5,$6}'
               if [ "${shown}" -gt 100 ]; then
                 echo
                 echo "_Showing the first 100 of ${shown}. The full report is in the uploaded artifact and in DefectDojo._"
