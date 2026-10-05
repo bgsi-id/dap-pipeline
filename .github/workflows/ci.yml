@@ -1,0 +1,130 @@
+name: CI
+
+# DevSecOps gates for the DAP pipelines: catalog validation, unit tests,
+# SAST/SCA (SonarQube, Semgrep, Trivy) and a scan of every container image the
+# pipelines reference, with findings in DefectDojo. Nothing is built or deployed
+# from this repository. See docs/ci.md for triggers, gates, baseline and rollback.
+#
+# PINNING: the `uses: bgsi-id/devsecsops_github/...@<ref>` lines are pinned to an
+# exact commit of the central repository's feature branch. Re-pin each to a full commit
+# SHA on the central main branch after the central PR is reviewed and merged.
+#
+# No top-level `paths:` filter on purpose: check names must also be reported on
+# documentation-only pull requests. Never use `pull_request_target` here: this
+# repository is public and the org secrets reach it.
+
+on:
+  pull_request:
+    branches: [dev]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+  schedule:
+    # Weekly image rescan: CVEs change without any commit here.
+    - cron: "0 2 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dap-pipeline-ci-${{ github.event_name }}-${{ github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Flip to "true" (a reviewed change) once every image is pinned to a digest.
+  ENFORCE_DIGEST_PINS: "false"
+
+jobs:
+  # ------------------------------------------------------------ validate
+  validate:
+    name: validate (catalog and CI scripts)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install pytest pyyaml
+      - name: Validate catalog.yaml
+        run: python .github/scripts/validate_catalog.py .
+      - name: Test the CI scripts
+        run: python -m pytest -q .github/scripts/tests
+
+  # --------------------------------------------------------------- tests
+  tests:
+    name: pytest (pipelines)
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: pip install pytest pyyaml
+      # Blocking: everything except the known-failing tests below.
+      - name: Run pipeline unit tests
+        run: >
+          python -m pytest -q --continue-on-collection-errors pipelines
+          --deselect pipelines/variant_etl/test_variant_etl_control.py::test_load_variants_anti_join_idempotency
+          --deselect pipelines/variant_etl/test_variant_etl_control.py::test_load_variants_failure_before_ledger_retry_does_not_duplicate
+      # Known baseline failure: these two tests import `variant_ingest` from the
+      # dap-variant package of the dap-platform repository, which is not part of
+      # this repository. Reported, not blocking, until they are made self-contained.
+      - name: Known-failing tests (reported, not blocking)
+        continue-on-error: true
+        run: >
+          python -m pytest -q
+          pipelines/variant_etl/test_variant_etl_control.py::test_load_variants_anti_join_idempotency
+          pipelines/variant_etl/test_variant_etl_control.py::test_load_variants_failure_before_ledger_retry_does_not_duplicate
+
+  # ------------------------------------------------------------ security
+  # SonarQube SAST + Semgrep SAST + Trivy filesystem SCA (secrets included).
+  security:
+    name: security
+    if: github.event_name != 'schedule'
+    uses: bgsi-id/devsecsops_github/.github/workflows/security-pipeline.yml@09138344c2b63bc7f93238cc5e1d9c32dbb221a7 # feat/dap-reusable-workflows
+    with:
+      branches: '["dev"]'
+    secrets:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
+
+  # ----------------------------------------------------- discover-images
+  discover-images:
+    name: discover container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      images: ${{ steps.list.outputs.images }}
+      count: ${{ steps.list.outputs.count }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: List images referenced by the pipelines
+        id: list
+        run: python .github/scripts/list_images.py .
+
+  # ---------------------------------------------------------- image-scan
+  image-scan:
+    name: image-scan (${{ matrix.name }})
+    needs: discover-images
+    if: needs.discover-images.outputs.count != '0'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include: ${{ fromJson(needs.discover-images.outputs.images) }}
+    uses: bgsi-id/devsecsops_github/.github/workflows/image-scan-registry-pipeline.yml@52135a0af672bd15a4d0e43f722c8ea8affbbe1a # feat/dap-reusable-workflows
+    with:
+      image-ref: ${{ matrix.image_ref }}
+      service: ${{ matrix.name }}
+      gate-ignore-unfixed: true
+      # Report-only until the baseline is reviewed; set per image afterwards.
+      non-blocking: true
+    secrets:
+      DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
