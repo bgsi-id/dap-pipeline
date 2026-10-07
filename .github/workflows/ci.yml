@@ -182,13 +182,13 @@ jobs:
         run: |
           set -euo pipefail
           BRANCH_NAME="${HEAD_REF:-${GITHUB_REF_NAME}}"
-          curl -sS --fail-with-body -X POST "${DEFECTDOJO_URL%/}/api/v2/import-scan/" \
+          curl -sS --fail-with-body -X POST "${DEFECTDOJO_URL%/}/api/v2/reimport-scan/" \
             -H "Authorization: Token ${DEFECTDOJO_TOKEN}" \
             -F "active=true" -F "verified=true" \
             -F "scan_type=SonarQube Scan" \
             -F "minimum_severity=Medium" \
             -F "engagement_name=Branch: ${BRANCH_NAME}" \
-            -F "test_title=Commit ${GITHUB_SHA:0:8} ($(TZ='Asia/Jakarta' date +'%d/%m/%Y %H:%M WIB'))" \
+            -F "test_title=SonarQube" \
             -F "product_name=${DEFECTDOJO_PRODUCT}" \
             -F "product_type_name=${DEFECTDOJO_PRODUCT_TYPE}" \
             -F "auto_create_context=true" \
@@ -247,13 +247,13 @@ jobs:
           set -euo pipefail
           [ -n "${DEFECTDOJO_TOKEN:-}" ] || { echo "::error::DEFECTDOJO_TOKEN is empty or unavailable."; exit 1; }
           BRANCH_NAME="${HEAD_REF:-${GITHUB_REF_NAME}}"
-          curl -sS --fail-with-body -X POST "${DEFECTDOJO_URL%/}/api/v2/import-scan/" \
+          curl -sS --fail-with-body -X POST "${DEFECTDOJO_URL%/}/api/v2/reimport-scan/" \
             -H "Authorization: Token ${DEFECTDOJO_TOKEN}" \
             -F "active=true" -F "verified=true" \
             -F "scan_type=Semgrep JSON Report" \
             -F "minimum_severity=Medium" \
             -F "engagement_name=Branch: ${BRANCH_NAME}" \
-            -F "test_title=Commit ${GITHUB_SHA:0:8} ($(TZ='Asia/Jakarta' date +'%d/%m/%Y %H:%M WIB'))" \
+            -F "test_title=Semgrep" \
             -F "product_name=${DEFECTDOJO_PRODUCT}" \
             -F "product_type_name=${DEFECTDOJO_PRODUCT_TYPE}" \
             -F "auto_create_context=true" \
@@ -320,13 +320,13 @@ jobs:
           set -euo pipefail
           [ -n "${DEFECTDOJO_TOKEN:-}" ] || { echo "::error::DEFECTDOJO_TOKEN is empty or unavailable."; exit 1; }
           BRANCH_NAME="${HEAD_REF:-${GITHUB_REF_NAME}}"
-          curl -sS --fail-with-body -X POST "${DEFECTDOJO_URL%/}/api/v2/import-scan/" \
+          curl -sS --fail-with-body -X POST "${DEFECTDOJO_URL%/}/api/v2/reimport-scan/" \
             -H "Authorization: Token ${DEFECTDOJO_TOKEN}" \
             -F "active=true" -F "verified=true" \
             -F "scan_type=Trivy Scan" \
             -F "minimum_severity=Medium" \
             -F "engagement_name=Branch: ${BRANCH_NAME}" \
-            -F "test_title=Commit ${GITHUB_SHA:0:8} ($(TZ='Asia/Jakarta' date +'%d/%m/%Y %H:%M WIB'))" \
+            -F "test_title=Trivy filesystem" \
             -F "product_name=${DEFECTDOJO_PRODUCT}" \
             -F "product_type_name=${DEFECTDOJO_PRODUCT_TYPE}" \
             -F "auto_create_context=true" \
@@ -531,18 +531,17 @@ jobs:
         env:
           DEFECTDOJO_TOKEN: ${{ secrets.DEFECTDOJO_TOKEN }}
           HEAD_REF: ${{ github.head_ref }}
-          DIGEST: ${{ steps.resolve.outputs.digest }}
         run: |
           set -euo pipefail
           [ -n "${DEFECTDOJO_TOKEN:-}" ] || { echo "::error::DEFECTDOJO_TOKEN is empty or unavailable."; exit 1; }
           BRANCH_NAME="${HEAD_REF:-${GITHUB_REF_NAME}}"
-          curl -sS --fail-with-body -X POST "${DEFECTDOJO_URL%/}/api/v2/import-scan/" \
+          curl -sS --fail-with-body -X POST "${DEFECTDOJO_URL%/}/api/v2/reimport-scan/" \
             -H "Authorization: Token ${DEFECTDOJO_TOKEN}" \
             -F "active=true" -F "verified=true" \
             -F "scan_type=Trivy Scan" \
             -F "minimum_severity=Medium" \
             -F "engagement_name=Branch: ${BRANCH_NAME}" \
-            -F "test_title=${SERVICE} Image ${DIGEST:0:19} ($(TZ='Asia/Jakarta' date +'%d/%m/%Y %H:%M WIB'))" \
+            -F "test_title=Image ${SERVICE}" \
             -F "product_name=${DEFECTDOJO_PRODUCT}" \
             -F "product_type_name=${DEFECTDOJO_PRODUCT_TYPE}" \
             -F "auto_create_context=true" \
