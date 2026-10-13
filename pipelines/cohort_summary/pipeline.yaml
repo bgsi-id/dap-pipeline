@@ -17,10 +17,10 @@ execution:
 inputs:
   - role: vcf
     parameter: vcf_uri
-    required: true
+    required: false
   - role: vcf_index
     parameter: vcf_index_uri
-    required: true
+    required: false
 data_input:
   contract: dap-pack-manifest/v1
   accepted_pack_kinds: [dataset, cohort]
