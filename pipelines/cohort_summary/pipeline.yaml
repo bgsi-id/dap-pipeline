@@ -14,16 +14,12 @@ token_estimate: 1
 execution:
   preferred_location: alor
   resource_profile: standard
-inputs:
-  - role: vcf
-    parameter: vcf_uri
-    required: false
-  - role: vcf_index
-    parameter: vcf_index_uri
-    required: false
+# Reads only the pack's sample list, so it asks for no per-sample assets: a
+# large pack's asset manifest would exceed the execution limit for nothing.
 data_input:
   contract: dap-pack-manifest/v1
   accepted_pack_kinds: [dataset, cohort]
+  pack_required: true
 outputs:
   - name: sample_list
     path: cohort-summary.tsv
