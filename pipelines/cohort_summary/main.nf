@@ -4,6 +4,7 @@ params.dap_input_manifest = null
 params.dap_output_uri = null
 
 process WRITE_COHORT_SUMMARY {
+    container params.python_image
     publishDir params.dap_output_uri, mode: 'copy', overwrite: true
 
     input:
