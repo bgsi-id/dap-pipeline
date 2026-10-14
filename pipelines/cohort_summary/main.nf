@@ -12,10 +12,11 @@ process WRITE_COHORT_SUMMARY {
 
     output:
     path 'cohort-summary.tsv'
+    path 'cohort-summary.json'
 
     script:
     """
-    python3 -c 'import json; data=json.load(open("${manifest}")); samples=data.get("samples") or []; rows=["sample_id\\tasset_roles"]; rows += ["{}\\t{}".format(sample.get("id", ""), ",".join(sorted(asset.get("role", "") for asset in sample.get("assets", [])))) for sample in samples]; open("cohort-summary.tsv", "w").write("\\n".join(rows) + "\\n")'
+    python3 '${projectDir}/bin/summarize_cohort.py' '${manifest}' cohort-summary.tsv cohort-summary.json
     """
 }
 
