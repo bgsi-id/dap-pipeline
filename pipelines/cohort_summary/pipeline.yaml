@@ -1,8 +1,8 @@
 schema_version: "1.0"
 id: cohort-summary
 name: Cohort summary
-version: 0.1.0
-description: Create a governed sample-list summary for a selected dataset or cohort pack.
+version: 0.2.0
+description: Summarise a selected dataset or cohort pack - sample count, sex, age, patient category and data availability - as aggregate counts with small counts suppressed.
 engine: nextflow
 engine_version: 26.04.6
 workflow_type: NFL
@@ -14,13 +14,18 @@ token_estimate: 1
 execution:
   preferred_location: alor
   resource_profile: standard
-# Reads only the pack's sample list, so it asks for no per-sample assets: a
-# large pack's asset manifest would exceed the execution limit for nothing.
+# Reports on the pack from an aggregate summary computed by the data service,
+# so it asks for no per-sample assets (a large pack's asset manifest would
+# exceed the execution limit for nothing) and receives no sample list to export.
 data_input:
   contract: dap-pack-manifest/v1
   accepted_pack_kinds: [dataset, cohort]
   pack_required: true
+  pack_summary: true
 outputs:
-  - name: sample_list
+  - name: summary
     path: cohort-summary.tsv
     media_type: text/tab-separated-values
+  - name: summary_json
+    path: cohort-summary.json
+    media_type: application/json
