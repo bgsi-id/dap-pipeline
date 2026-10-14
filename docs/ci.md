@@ -9,9 +9,15 @@ built or deployed from here: DAP runs the Nextflow workflows pinned to a full Gi
 | --- | --- | --- |
 | `validate` | `catalog.yaml` contract check (`.github/scripts/validate_catalog.py`) and the tests of the CI scripts | yes |
 | `tests` | `pytest` over `pipelines/` | yes, except the known failures below |
-| `security` | Central `security-pipeline.yml`: SonarQube SAST, Semgrep SAST, Trivy filesystem SCA (also finds committed secrets). Findings go to SonarQube and DefectDojo | yes (Sonar quality gate, Semgrep ERROR, Trivy CRITICAL/HIGH) |
+| `security / SonarQube SAST`, `security / Semgrep SAST`, `security / Trivy SCA (filesystem)` | SAST and SCA (Trivy also finds committed secrets). Findings go to SonarQube and DefectDojo | yes (Sonar quality gate, Semgrep ERROR, Trivy CRITICAL/HIGH) |
 | `discover-images` | Lists every container image the pipelines reference (`.github/scripts/list_images.py`) | yes (a malformed reference fails) |
-| `image-scan` | One Trivy scan per image through the central `image-scan-registry-pipeline.yml`; report artifact, step summary table, DefectDojo import | **no** for now (`non-blocking: true`) |
+| `image-scan` | One Trivy scan per image; report artifact, step summary table, DefectDojo import | **no** for now (`non-blocking: true`) |
+
+## Order
+
+`validate`, `tests` and the three `security / ...` jobs run in parallel. `discover-images` and then
+`image-scan` start only when all five have passed, as in `dap-platform`. The weekly schedule skips the
+five (the code did not change) and runs `discover-images` and `image-scan` directly.
 
 ## Triggers
 
@@ -42,14 +48,18 @@ tests, validation, Semgrep and Trivy still run.
 - The two skipped tests in `differentially_methylated_regions/tests/test_call_dmrs_container.py` need
   Docker. Their behaviour on a GitHub runner is confirmed on the first run and recorded here.
 
-## Pinning
+## Why the workflow is self-contained
 
-The central workflows are pinned to a full commit SHA on `devsecsops_github` main. Update the SHA in `ci.yml` deliberately when they change.
+This repository is public and the central `bgsi-id/devsecsops_github` workflows are private. GitHub
+does not allow a public repository to call reusable workflows from a private one, so the scan logic
+is inlined in `ci.yml`. It mirrors the central `security-pipeline.yml` and
+`image-scan-digest-pipeline.yml`; when those change, update `ci.yml` by hand.
 
 ## Settings
 
-No repository settings are needed: `SONAR_TOKEN`, `DEFECTDOJO_TOKEN` and `SONAR_HOST_URL` are
-organization-level. The SonarQube project key and the DefectDojo product are both `dap-pipeline`.
+`SONAR_TOKEN`, `DEFECTDOJO_TOKEN` and `SONAR_HOST_URL` are organization-level. `DEFECTDOJO_URL` must be
+available to this repository as a **secret** (not a variable or a literal in the workflow), because logs
+are public and a secret is masked in them. The SonarQube project key and the DefectDojo product are both `dap-pipeline`.
 The organization is on the GitHub Free plan, so required checks cannot be enforced yet. When they can,
 require `validate`, `tests`, the three `security / ...` jobs and the blocking `image-scan` jobs.
 
