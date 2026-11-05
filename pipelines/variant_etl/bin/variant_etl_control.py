@@ -29,7 +29,7 @@ def normalize_s3_uri(uri: str) -> str:
 
 def sql(client: httpx.Client, url: str, database: str, statement: str) -> str:
     response = client.post(
-        url, params={"database": database, "max_threads": "2", "max_insert_threads": "1", "max_download_threads": "2", "input_format_parquet_max_block_size": "8192", "max_block_size": "8192", "max_memory_usage": "2800000000", "max_bytes_before_external_group_by": "800000000", "max_bytes_before_external_sort": "800000000", "join_algorithm": "grace_hash,hash"}, content=statement.encode("utf-8")
+        url, params={"database": database, "max_threads": "2", "max_insert_threads": "1", "max_download_threads": "2", "input_format_parquet_max_block_size": "8192", "max_block_size": "8192", "max_memory_usage": "2800000000", "max_bytes_before_external_group_by": "800000000", "max_bytes_before_external_sort": "800000000", "max_bytes_in_join": "250000000", "join_algorithm": "grace_hash,hash"}, content=statement.encode("utf-8")
     )
     response.raise_for_status()
     return response.text
