@@ -281,9 +281,9 @@ process NORMALIZE_AF_FIELDS {
       printf 'INFO/gnomad_popmax_af INFO/gnomad_af_popmax\n' >> rename-annots.tsv
     fi
     if ! printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_nhomalt[>,]'; then
-      printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_nhomalts[>,]' \
-        || { echo 'Echtvar output lacks gnomAD nhomalt field' >&2; exit 1; }
-      printf 'INFO/gnomad_nhomalts INFO/gnomad_nhomalt\n' >> rename-annots.tsv
+      if printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_nhomalts[>,]'; then
+        printf 'INFO/gnomad_nhomalts INFO/gnomad_nhomalt\n' >> rename-annots.tsv
+      fi
     fi
     if [ -s rename-annots.tsv ]; then
       bcftools annotate --rename-annots rename-annots.tsv -Oz \
@@ -293,7 +293,6 @@ process NORMALIZE_AF_FIELDS {
     fi
     normalized_header="\$(bcftools view -h site.gnomad.vcf.gz)"
     printf '%s\n' "\${normalized_header}" | grep -q '##INFO=<ID=gnomad_af_popmax[>,]'
-    printf '%s\n' "\${normalized_header}" | grep -q '##INFO=<ID=gnomad_nhomalt[>,]'
     """
 }
 
