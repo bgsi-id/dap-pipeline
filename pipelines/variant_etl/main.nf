@@ -173,6 +173,7 @@ process LOAD_VARIANTS {
     cpus 1
     memory '2 GB'
     time '2h'
+    maxForks 1
     errorStrategy 'retry'
     maxRetries 3
 

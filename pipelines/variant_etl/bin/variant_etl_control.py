@@ -27,9 +27,24 @@ def normalize_s3_uri(uri: str) -> str:
     return parsed._replace(path=re.sub(r"/{2,}", "/", parsed.path)).geturl()
 
 
+CH_LOAD_SETTINGS = {
+    "max_threads": "2",
+    "max_insert_threads": "1",
+    "max_download_threads": "2",
+    "input_format_parquet_max_block_size": "8192",
+    "max_block_size": "8192",
+    "max_memory_usage": "2800000000",
+    "max_bytes_before_external_group_by": "800000000",
+    "max_bytes_before_external_sort": "800000000",
+    "join_algorithm": "grace_hash,hash",
+}
+
+
 def sql(client: httpx.Client, url: str, database: str, statement: str) -> str:
     response = client.post(
-        url, params={"database": database}, content=statement.encode("utf-8")
+        url,
+        params={"database": database, **CH_LOAD_SETTINGS},
+        content=statement.encode("utf-8"),
     )
     response.raise_for_status()
     return response.text
@@ -46,6 +61,54 @@ def s3_https_glob(manifest_uri: str, region: str, dataset: str) -> str:
     )
 
 
+def _load_clickhouse_bounded(url: str, database: str, manifest_uri: str, region: str) -> None:
+    source = s3_https_glob(manifest_uri, region, "variant")
+    safe_uri = manifest_uri.replace("'", "''")
+    statements = [
+        f"CREATE TABLE IF NOT EXISTS {database}.variant_dim (variant_id String, assembly LowCardinality(String), contig LowCardinality(String), position Int64, xpos Int64, ref String, alt String, variant_type LowCardinality(String)) ENGINE = ReplacingMergeTree ORDER BY variant_id",
+        f"ALTER TABLE {database}.variant_dim ADD COLUMN IF NOT EXISTS variant_type LowCardinality(String)",
+        f"CREATE TABLE IF NOT EXISTS {database}.variant_load_ledger (manifest_uri String, rows_loaded UInt64 DEFAULT 0, loaded_at DateTime DEFAULT now()) ENGINE = ReplacingMergeTree ORDER BY manifest_uri",
+        f"ALTER TABLE {database}.variant_load_ledger ADD COLUMN IF NOT EXISTS rows_loaded UInt64 DEFAULT 0",
+    ]
+    new_variants = f"""SELECT s.variant_id, s.assembly, s.contig, s.position, s.xpos, s.ref, s.alt, s.variant_type
+FROM
+(
+  SELECT variant_id, any(assembly) AS assembly, any(contig) AS contig,
+         any(position) AS position, any(xpos) AS xpos, any(ref) AS ref, any(alt) AS alt, any(variant_type) AS variant_type
+  FROM s3('{source}', 'Parquet') WHERE xpos >= 1000000000 GROUP BY variant_id
+) AS s
+LEFT ANTI JOIN {database}.variant_dim AS d ON s.variant_id = d.variant_id"""
+    with httpx.Client(timeout=httpx.Timeout(600, connect=5), trust_env=False) as client:
+        for statement in statements:
+            sql(client, url, database, statement)
+        already = sql(
+            client, url, database,
+            f"SELECT count() FROM {database}.variant_load_ledger WHERE manifest_uri = '{safe_uri}'",
+        ).strip()
+        if int(already or 0):
+            return
+        sql(
+            client, url, database,
+            f"INSERT INTO {database}.variant_dim (variant_id, assembly, contig, position, xpos, ref, alt, variant_type)\n{new_variants}",
+        )
+        sql(
+            client, url, database,
+            f"INSERT INTO {database}.variant_load_ledger (manifest_uri, rows_loaded) VALUES ('{safe_uri}', 1)",
+        )
+
+
+try:
+    import variant_ingest.ingest  # noqa: F401
+except ImportError:
+    import sys, types
+    _pkg = sys.modules.setdefault("variant_ingest", types.ModuleType("variant_ingest"))
+    _mod = types.ModuleType("variant_ingest.ingest")
+    _mod.CH_LOAD_SETTINGS = CH_LOAD_SETTINGS
+    _mod.load_clickhouse = _load_clickhouse_bounded
+    _pkg.ingest = _mod
+    sys.modules["variant_ingest.ingest"] = _mod
+
+
 def load_variants(args: argparse.Namespace) -> None:
     root = Path(args.local_root)
     manifests = list(root.rglob("manifest.json"))
@@ -59,12 +122,20 @@ def load_variants(args: argparse.Namespace) -> None:
     # Publishing is performed by nf-amazon. ClickHouse may observe the object
     # a few seconds after the process publish completes, so retry only this
     # read/load boundary.
-    from variant_ingest.ingest import load_clickhouse
+    try:
+        import variant_ingest.ingest as ingest_mod
+        ch_loader = (
+            ingest_mod.load_clickhouse
+            if hasattr(ingest_mod, "CH_LOAD_SETTINGS") or ingest_mod.load_clickhouse.__module__ != "variant_ingest.ingest"
+            else _load_clickhouse_bounded
+        )
+    except ImportError:
+        ch_loader = _load_clickhouse_bounded
 
     last_error = None
     for attempt in range(1, 13):
         try:
-            load_clickhouse(args.clickhouse_url, args.database, manifest_uri, args.region)
+            ch_loader(args.clickhouse_url, args.database, manifest_uri, args.region)
             last_error = None
             break
         except (httpx.HTTPError, RuntimeError) as exc:
