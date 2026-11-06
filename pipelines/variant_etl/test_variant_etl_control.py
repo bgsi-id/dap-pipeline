@@ -1,4 +1,5 @@
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,21 @@ import pytest
 bin_dir = str(Path(__file__).resolve().parent / "bin")
 if bin_dir not in sys.path:
     sys.path.insert(0, bin_dir)
+
+# Ensure variant_ingest can be imported even if dap-variant is not in environment
+if "variant_ingest" not in sys.modules:
+    dap_variant_dir = str(Path(__file__).resolve().parents[3] / "dap-variant")
+    if Path(dap_variant_dir).is_dir() and dap_variant_dir not in sys.path:
+        sys.path.insert(0, dap_variant_dir)
+    try:
+        import variant_ingest.ingest  # type: ignore[import-untyped]
+    except ImportError:
+        pkg = types.ModuleType("variant_ingest")
+        mod = types.ModuleType("variant_ingest.ingest")
+        mod.load_clickhouse = lambda *args, **kwargs: None
+        pkg.ingest = mod
+        sys.modules["variant_ingest"] = pkg
+        sys.modules["variant_ingest.ingest"] = mod
 
 import variant_etl_control as control
 
