@@ -56,6 +56,9 @@ def load_variants(args: argparse.Namespace) -> None:
         f"{args.published_root.rstrip('/')}/{relative}"
     )
 
+    manifest_data = json.loads(manifests[0].read_text())
+    expected_alt_calls = int(manifest_data.get("alt_calls", 0))
+
     # Publishing is performed by nf-amazon. ClickHouse may observe the object
     # a few seconds after the process publish completes, so retry only this
     # read/load boundary.
@@ -124,16 +127,46 @@ ORDER BY (sample_id, source_sha256);
             f"SELECT count() FROM {args.database}.variant_ingestion_ledger "
             f"WHERE sample_id='{safe_sample}' AND source_sha256='{safe_hash}'",
         ).strip()
-        if int(already or 0) == 0:
-            call_count = int(
-                sql(
-                    client,
-                    args.clickhouse_url,
-                    args.database,
-                    f"SELECT count() FROM s3('{call_source}', 'Parquet')",
-                ).strip()
-                or 0
-            )
+        existing_calls = int(
+            sql(
+                client,
+                args.clickhouse_url,
+                args.database,
+                f"SELECT count() FROM {args.database}.variant_call "
+                f"WHERE sample_id='{safe_sample}'",
+            ).strip()
+            or 0
+        )
+        if int(already or 0) == 0 or (expected_alt_calls > 0 and existing_calls == 0):
+            call_count = 0
+            call_error = None
+            for attempt in range(1, 13):
+                try:
+                    call_count = int(
+                        sql(
+                            client,
+                            args.clickhouse_url,
+                            args.database,
+                            f"SELECT count() FROM s3('{call_source}', 'Parquet')",
+                        ).strip()
+                        or 0
+                    )
+                    if call_count >= expected_alt_calls or expected_alt_calls == 0 or call_count > 0:
+                        call_error = None
+                        break
+                except (httpx.HTTPError, RuntimeError) as exc:
+                    call_error = exc
+                if attempt == 12:
+                    break
+                time.sleep(min(5 * attempt, 30))
+
+            if call_error is not None:
+                raise call_error
+            if expected_alt_calls > 0 and call_count == 0:
+                raise RuntimeError(
+                    f"ClickHouse observed 0 calls from {call_source}, but manifest expected {expected_alt_calls} alt_calls"
+                )
+
             if call_count:
                 sql(
                     client,

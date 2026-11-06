@@ -283,3 +283,145 @@ def test_annotation_loader_uses_canonical_hgnc_schema(monkeypatch, tmp_path):
     detail = next(row for row in inserted_rows if row.get("hgnc") == "GENE1")
     assert detail["vep_consequence"] == ["missense_variant"]
     assert detail["scores"]["revel"] == 0.8
+
+
+def test_load_variants_fails_fast_when_call_count_zero(monkeypatch, tmp_path):
+    import json
+    dap_variant_dir = str(Path(__file__).resolve().parents[3] / "dap-variant")
+    if dap_variant_dir not in sys.path:
+        sys.path.insert(0, dap_variant_dir)
+    import variant_ingest.ingest
+
+    local_root = tmp_path / "published"
+    sample_dir = local_root / "sample-test"
+    sample_dir.mkdir(parents=True)
+    (sample_dir / "manifest.json").write_text(json.dumps({
+        "sample_id": "sample-test",
+        "alt_calls": 42
+    }))
+    monkeypatch.setattr(variant_ingest.ingest, "load_clickhouse", lambda *args: None)
+    monkeypatch.setattr(control.time, "sleep", lambda *args: None)
+
+    statements = []
+    def fake_sql(client, url, database, statement):
+        statements.append(statement)
+        if "SELECT count() FROM default.variant_ingestion_ledger" in statement:
+            return "0"
+        if "SELECT count() FROM default.variant_call" in statement:
+            return "0"
+        if "SELECT count() FROM s3" in statement:
+            return "0"
+        return ""
+
+    monkeypatch.setattr(control, "sql", fake_sql)
+    args = type("Args", (), {
+        "sample_id": "sample-test",
+        "local_root": str(local_root),
+        "published_root": "s3://bucket/variants",
+        "source_sha256": "b" * 64,
+        "region": "ap-southeast-3",
+        "clickhouse_url": "http://mock-ch:8123",
+        "database": "default",
+        "output": str(tmp_path / "output.json"),
+    })()
+
+    with pytest.raises(RuntimeError, match="ClickHouse observed 0 calls from .* manifest expected 42 alt_calls"):
+        control.load_variants(args)
+
+    assert not any("INSERT INTO default.variant_call" in s for s in statements)
+    assert not any("INSERT INTO default.variant_ingestion_ledger" in s for s in statements)
+
+
+def test_load_variants_retries_and_succeeds_when_parquet_appears(monkeypatch, tmp_path):
+    import json
+    dap_variant_dir = str(Path(__file__).resolve().parents[3] / "dap-variant")
+    if dap_variant_dir not in sys.path:
+        sys.path.insert(0, dap_variant_dir)
+    import variant_ingest.ingest
+
+    local_root = tmp_path / "published"
+    sample_dir = local_root / "sample-test"
+    sample_dir.mkdir(parents=True)
+    (sample_dir / "manifest.json").write_text(json.dumps({
+        "sample_id": "sample-test",
+        "alt_calls": 15
+    }))
+    monkeypatch.setattr(variant_ingest.ingest, "load_clickhouse", lambda *args: None)
+    monkeypatch.setattr(control.time, "sleep", lambda *args: None)
+
+    state = {"attempts": 0}
+    statements = []
+    def fake_sql(client, url, database, statement):
+        statements.append(statement)
+        if "SELECT count() FROM default.variant_ingestion_ledger" in statement:
+            return "0"
+        if "SELECT count() FROM default.variant_call" in statement:
+            return "0"
+        if "SELECT count() FROM s3" in statement:
+            state["attempts"] += 1
+            if state["attempts"] < 3:
+                return "0"
+            return "15"
+        return ""
+
+    monkeypatch.setattr(control, "sql", fake_sql)
+    args = type("Args", (), {
+        "sample_id": "sample-test",
+        "local_root": str(local_root),
+        "published_root": "s3://bucket/variants",
+        "source_sha256": "c" * 64,
+        "region": "ap-southeast-3",
+        "clickhouse_url": "http://mock-ch:8123",
+        "database": "default",
+        "output": str(tmp_path / "output.json"),
+    })()
+
+    control.load_variants(args)
+
+    assert state["attempts"] == 3
+    assert any("INSERT INTO default.variant_call" in s for s in statements)
+    assert any("INSERT INTO default.variant_ingestion_ledger" in s for s in statements)
+
+
+def test_load_variants_recovers_if_ledger_exists_but_calls_empty(monkeypatch, tmp_path):
+    import json
+    dap_variant_dir = str(Path(__file__).resolve().parents[3] / "dap-variant")
+    if dap_variant_dir not in sys.path:
+        sys.path.insert(0, dap_variant_dir)
+    import variant_ingest.ingest
+
+    local_root = tmp_path / "published"
+    sample_dir = local_root / "sample-test"
+    sample_dir.mkdir(parents=True)
+    (sample_dir / "manifest.json").write_text(json.dumps({
+        "sample_id": "sample-test",
+        "alt_calls": 20
+    }))
+    monkeypatch.setattr(variant_ingest.ingest, "load_clickhouse", lambda *args: None)
+
+    statements = []
+    def fake_sql(client, url, database, statement):
+        statements.append(statement)
+        if "SELECT count() FROM default.variant_ingestion_ledger" in statement:
+            return "1"  # Ledger was already written erroneously
+        if "SELECT count() FROM default.variant_call" in statement:
+            return "0"  # But calls are 0
+        if "SELECT count() FROM s3" in statement:
+            return "20"
+        return ""
+
+    monkeypatch.setattr(control, "sql", fake_sql)
+    args = type("Args", (), {
+        "sample_id": "sample-test",
+        "local_root": str(local_root),
+        "published_root": "s3://bucket/variants",
+        "source_sha256": "d" * 64,
+        "region": "ap-southeast-3",
+        "clickhouse_url": "http://mock-ch:8123",
+        "database": "default",
+        "output": str(tmp_path / "output.json"),
+    })()
+
+    control.load_variants(args)
+
+    assert any("INSERT INTO default.variant_call" in s for s in statements)
