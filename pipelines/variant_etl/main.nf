@@ -455,6 +455,8 @@ process ANNOTATE_DETAIL_VEP {
     cpus 16
     memory '32 GB'
     time '18h'
+    errorStrategy 'retry'
+    maxRetries 2
 
     input:
     path selected_vcf
@@ -473,7 +475,17 @@ process ANNOTATE_DETAIL_VEP {
     if [ "\${selected_count}" -eq 0 ]; then
       cp '${selected_vcf}' site.detail.vcf.gz
     else
-      test -f /opt/vep/.vep/Plugins/REVEL.pm
+      plugin_dir=""
+      for candidate in "${projectDir}/bin" "\${VEP_DIR_PLUGINS:-/plugins}" /plugins /opt/vep/.vep/Plugins "${params.reference_dir}"; do
+        if [ -f "\${candidate}/REVEL.pm" ]; then
+          plugin_dir="\${candidate}"
+          break
+        fi
+      done
+      if [ -z "\${plugin_dir}" ]; then
+        echo "REVEL.pm plugin not found in candidate paths" >&2
+        exit 1
+      fi
       vep \
         --input_file '${selected_vcf}' \
         --output_file site.detail.vcf.gz \
@@ -486,6 +498,7 @@ process ANNOTATE_DETAIL_VEP {
         --allele_number --sift b --polyphen b \
         --shift_hgvs 1 --numbers --domains --protein --uniprot \
         --flag_pick --pick_order mane_select,mane_plus_clinical,canonical,rank \
+        --dir_plugins "\${plugin_dir}" \
         --plugin REVEL,file='${params.reference_dir}/${params.revel_name}' \
         --fork ${task.cpus} --buffer_size ${params.vep_buffer_size} \
         --no_stats --force_overwrite
@@ -500,6 +513,8 @@ process INDEX_DETAIL_VCF {
     cpus 4
     memory '4 GB'
     time '2h'
+    errorStrategy 'retry'
+    maxRetries 2
 
     input:
     path vep_vcf, name: 'vep-output.vcf.gz'
@@ -518,7 +533,7 @@ process INDEX_DETAIL_VCF {
     if [ "\${selected_count}" -gt 0 ]; then
       bcftools view -h site.detail.vcf.gz \
         | grep '##INFO=<ID=CSQ' \
-        | grep -q 'REVEL'
+        | grep -qi 'REVEL'
     fi
     bcftools index -t --threads ${task.cpus} site.detail.vcf.gz
     """
@@ -531,6 +546,8 @@ process LOAD_ANNOTATIONS {
     cpus 2
     memory '4 GB'
     time '4h'
+    errorStrategy 'retry'
+    maxRetries 2
 
     input:
     path base_vcf
