@@ -175,7 +175,14 @@ ORDER BY (sample_id, source_sha256);
                     f"""INSERT INTO {args.database}.variant_call
 (release_id,batch_id,sample_id,variant_id,alt_dosage,genotype,zygosity,phased,phase_set,dp,gq,ad_ref,ad_alt,vaf,qual,filter)
 SELECT s.release_id, s.batch_id, s.sample_id, s.variant_id, s.alt_dosage, s.genotype, s.zygosity, s.phased, s.phase_set, s.dp, s.gq, s.ad_ref, s.ad_alt, s.vaf, s.qual, s.filter
-FROM s3('{call_source}', 'Parquet') AS s
+FROM
+(
+  -- Read the Parquet columns by plain name first. Selecting `s.col` straight from the
+  -- aliased s3() table function inserts blank rows (every key empty, ReplacingMergeTree
+  -- then collapses them to one), so the sample loads with no calls.
+  SELECT release_id,batch_id,sample_id,variant_id,alt_dosage,genotype,zygosity,phased,phase_set,dp,gq,ad_ref,ad_alt,vaf,qual,filter
+  FROM s3('{call_source}', 'Parquet')
+) AS s
 LEFT ANTI JOIN
 (
   SELECT release_id, sample_id, variant_id

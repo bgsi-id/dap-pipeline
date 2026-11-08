@@ -1,3 +1,4 @@
+import re
 import sys
 import types
 from pathlib import Path
@@ -188,6 +189,10 @@ def test_load_variants_anti_join_idempotency(monkeypatch, tmp_path):
     call_inserts = [q for q in queries_run if "INSERT INTO default.variant_call" in q]
     assert len(call_inserts) == 1
     assert "LEFT ANTI JOIN" in call_inserts[0]
+    # columns must be read from the Parquet by plain name, not as `s.col` off the aliased s3()
+    # (that form inserts blank rows on ClickHouse)
+    assert re.search(r"FROM\s*\(\s*(--[^\n]*\n\s*)*SELECT release_id,batch_id.*FROM s3\(.*\)\s*AS s\s*LEFT ANTI JOIN", call_inserts[0], re.S)
+    assert not re.search(r"FROM s3\([^)]*\)\s*AS s\b", call_inserts[0])
     assert "FROM default.variant_call" in call_inserts[0]
     assert "WHERE sample_id = 'sample-test'" in call_inserts[0]
     # Verify ledger was written
