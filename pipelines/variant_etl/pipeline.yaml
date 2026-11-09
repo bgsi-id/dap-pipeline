@@ -44,6 +44,11 @@ parameters:
     type: string
     required: false
     default: grch38-v3
+  - name: annotation_scope
+    type: select
+    required: false
+    default: cohort
+    options: [cohort, samples]
   - name: af_threshold
     type: number
     required: false

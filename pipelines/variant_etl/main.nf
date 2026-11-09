@@ -18,6 +18,9 @@ params.release_id = null
 params.batch_id = null
 params.assembly = 'GRCh38'
 params.annotation_pack = 'grch38-v3'
+// 'cohort': annotate every unannotated site in the variant table (default).
+// 'samples': annotate only sites called in this run's samples (single-sample interpretation).
+params.annotation_scope = 'cohort'
 params.af_threshold = 0.01
 params.max_annotation_variants = null
 params.reference_dir = '/reference'
@@ -209,6 +212,7 @@ process EXPORT_NOVEL_SITES {
     input:
     val load_receipts
     path reference_ready
+    val scope_sample_ids
 
     output:
     path 'site.vcf.gz', emit: vcf
@@ -216,6 +220,7 @@ process EXPORT_NOVEL_SITES {
 
     script:
     def limitArg = params.max_annotation_variants ? "--max-variants ${params.max_annotation_variants}" : ''
+    def scopeArg = scope_sample_ids ? "--sample-ids '${scope_sample_ids}'" : ''
     """
     set -euo pipefail
     CLICKHOUSE_URL='${params.clickhouse_url}' \
@@ -225,6 +230,7 @@ process EXPORT_NOVEL_SITES {
       --output site.vcf.gz \
       --annotation-pack '${params.annotation_pack}' \
       --assembly '${params.assembly}' \
+      ${scopeArg} \
       ${limitArg} | tee site-export.txt
     """
 }
@@ -623,6 +629,9 @@ workflow {
     safe_component(params.release_id, 'release_id')
     safe_component(params.batch_id, 'batch_id')
     safe_component(params.annotation_pack, 'annotation_pack')
+    if (!(params.annotation_scope in ['cohort', 'samples'])) {
+        error "annotation_scope must be 'cohort' or 'samples'"
+    }
     def threshold = params.af_threshold as double
     if (threshold < 0.0 || threshold > 1.0) error 'af_threshold must be between 0 and 1'
 
@@ -662,7 +671,8 @@ workflow {
     ingested = INGEST_SAMPLE(prepared_inputs)
     loaded = LOAD_VARIANTS(ingested.parquet)
     load_barrier = loaded.receipt.collect()
-    sites = EXPORT_NOVEL_SITES(load_barrier, references)
+    scope_sample_ids = params.annotation_scope == 'samples' ? sampleIds.collect { safe_component(it, 'sample_id') }.join(',') : ''
+    sites = EXPORT_NOVEL_SITES(load_barrier, references, scope_sample_ids)
     af_raw = ANNOTATE_AF(sites.vcf, references)
     af = NORMALIZE_AF_FIELDS(af_raw.vcf, references)
     clinvar = ANNOTATE_CLINVAR(af.vcf, references)
