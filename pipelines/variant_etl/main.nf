@@ -322,7 +322,15 @@ process ANNOTATE_CLINVAR {
     """
     set -euo pipefail
     bcftools index -t --threads ${task.cpus} '${frequency_vcf}'
-    bcftools annotate \
+    # With no sites to annotate, restrict the scan to the (empty) site list. bcftools annotate -a
+    # otherwise reads the whole ClinVar file whatever the input holds. The output, including its
+    # header, is the same; non-empty inputs run exactly as before.
+    region_args=""
+    if [ -z "\$(bcftools view -H '${frequency_vcf}' | head -n 1 || true)" ]; then
+      echo 'No sites to annotate: not reading the ClinVar file' >&2
+      region_args="-R ${frequency_vcf}"
+    fi
+    bcftools annotate \$region_args \
       -a '${params.reference_dir}/${params.clinvar_name}' \
       -c INFO/CLNSIG,INFO/CLNSIGCONF,INFO/CLNREVSTAT,INFO/CLNDN,INFO/CLNVI \
       --pair-logic exact \
@@ -353,7 +361,15 @@ process ANNOTATE_SPLICEAI {
     script:
     """
     set -euo pipefail
-    bcftools annotate \
+    # With no sites to annotate, restrict the scan to the (empty) site list. bcftools annotate -a
+    # otherwise reads the whole SpliceAI file whatever the input holds (about 20 minutes on staging
+    # with zero sites). The output, including its header, is the same; non-empty inputs run as before.
+    region_args=""
+    if [ -z "\$(bcftools view -H '${clinvar_vcf}' | head -n 1 || true)" ]; then
+      echo 'No sites to annotate: not reading the SpliceAI file' >&2
+      region_args="-R ${clinvar_vcf}"
+    fi
+    bcftools annotate \$region_args \
       -a '${params.reference_dir}/${params.spliceai_name}' \
       -c INFO/SpliceAI \
       --pair-logic exact \

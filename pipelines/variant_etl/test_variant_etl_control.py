@@ -446,3 +446,24 @@ def test_load_variants_recovers_if_ledger_exists_but_calls_empty(monkeypatch, tm
     control.load_variants(args)
 
     assert any("INSERT INTO default.variant_call" in s for s in statements)
+
+
+def _process_script(name):
+    text = (Path(__file__).resolve().parent / "main.nf").read_text()
+    return text.split(f"process {name} {{", 1)[1].split("\n}\n", 1)[0]
+
+
+@pytest.mark.parametrize("process,reference_param", [
+    ("ANNOTATE_CLINVAR", "clinvar_name"),
+    ("ANNOTATE_SPLICEAI", "spliceai_name"),
+])
+def test_reference_scan_is_restricted_when_there_are_no_sites(process, reference_param):
+    script = _process_script(process)
+    # empty site list: restrict bcftools annotate to it, so the whole reference file is not read
+    assert 'region_args=""' in script
+    assert "bcftools view -H" in script and "head -n 1" in script
+    assert 'region_args="-R ' in script
+    assert "bcftools annotate \\$region_args" in script
+    # the annotation itself is unchanged
+    assert f"-a '${{params.reference_dir}}/${{params.{reference_param}}}'" in script
+    assert "--pair-logic exact" in script
