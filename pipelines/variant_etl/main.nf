@@ -59,6 +59,7 @@ def sample_from_asset(def sample) {
     }
     return [
         sample_id: sample.id.toString(),
+        sample_alias: (sample.source_alias ?: sample.display_name ?: sample.name ?: '')?.toString()?.trim(),
         vcf_uri: assets.vcf.access_uri.toString(),
         index_uri: assets.vcf_index.access_uri.toString(),
     ]
@@ -687,7 +688,11 @@ workflow {
     ingested = INGEST_SAMPLE(prepared_inputs)
     loaded = LOAD_VARIANTS(ingested.parquet)
     load_barrier = loaded.receipt.collect()
-    scope_sample_ids = params.annotation_scope == 'samples' ? sampleIds.collect { safe_component(it, 'sample_id') }.join(',') : ''
+    def scopeIds = (
+        sampleIds.collect { safe_component(it, 'sample_id') } +
+        records.collect { it.sample_alias }.findAll { it && (it ==~ /[A-Za-z0-9._-]{1,128}/) }
+    ).unique()
+    scope_sample_ids = params.annotation_scope == 'samples' ? scopeIds.join(',') : ''
     sites = EXPORT_NOVEL_SITES(load_barrier, references, scope_sample_ids)
     af_raw = ANNOTATE_AF(sites.vcf, references)
     af = NORMALIZE_AF_FIELDS(af_raw.vcf, references)

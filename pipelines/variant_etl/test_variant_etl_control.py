@@ -467,3 +467,11 @@ def test_reference_scan_is_restricted_when_there_are_no_sites(process, reference
     # the annotation itself is unchanged
     assert f"-a '${{params.reference_dir}}/${{params.{reference_param}}}'" in script
     assert "--pair-logic exact" in script
+
+
+def test_sample_scope_includes_alias_when_present():
+    text = (Path(__file__).resolve().parent / "main.nf").read_text()
+    assert "sample_alias:" in text
+    assert "records.collect { it.sample_alias }" in text
+    assert "scope_sample_ids = params.annotation_scope == 'samples' ? scopeIds.join(',') : ''" in text
+
