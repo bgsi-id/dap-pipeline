@@ -11,9 +11,20 @@ import json
 import sys
 
 STATS = ("n", "missing", "mean", "q1", "median", "q3")
+_FORMULA_PREFIXES = ("=", "+", "-", "@")
+
+
+def _safe_cell(value):
+    if isinstance(value, str) and value.startswith(_FORMULA_PREFIXES):
+        try:
+            float(value)
+        except ValueError:
+            return f"'{value}"
+    return value
 
 
 def report_rows(summary):
+    min_cell = summary.get("min_cell", 5)
     yield ("overview", "samples", "total", summary.get("sample_count"))
     for field in summary.get("fields") or []:
         label = field.get("label") or field.get("key")
@@ -24,7 +35,7 @@ def report_rows(summary):
             yield ("demographics", label, category, count)
     for role, count in (summary.get("data_availability") or {}).items():
         yield ("data_availability", role, "samples", count)
-    yield ("notes", "small_counts", f"values below {summary.get('min_cell', 5)} are shown as <5", "")
+    yield ("notes", "small_counts", f"values below {min_cell} are shown as <{min_cell}", "")
 
 
 def main(argv):
@@ -44,7 +55,8 @@ def main(argv):
     with open(tsv_path, "w", newline="") as handle:
         writer = csv.writer(handle, delimiter="\t", lineterminator="\n")
         writer.writerow(["section", "field", "item", "value"])
-        writer.writerows(report_rows(summary))
+        for row in report_rows(summary):
+            writer.writerow([_safe_cell(cell) for cell in row])
     with open(json_path, "w") as handle:
         json.dump({"summary": summary}, handle, indent=2, sort_keys=True)
         handle.write("\n")

@@ -5,7 +5,10 @@ params.dap_output_uri = null
 
 process WRITE_COHORT_SUMMARY {
     container params.python_image
-    publishDir params.dap_output_uri, mode: 'copy', overwrite: true
+    cpus 1
+    memory '512 MB'
+    time '15m'
+    publishDir params.dap_output_uri, mode: 'copy', overwrite: true, failOnError: true
 
     input:
     path manifest

@@ -82,3 +82,20 @@ def test_a_manifest_without_a_summary_fails_loudly(tmp_path):
     assert done.returncode != 0
     assert "no summary" in done.stderr.lower()
     assert not (tmp_path / "out.tsv").exists()
+
+
+def test_dynamic_min_cell_note_and_formula_neutralization(tmp_path):
+    custom = {
+        **SUMMARY,
+        "min_cell": 10,
+        "fields": [
+            {"key": "patient_categ", "label": "Patient category", "type": "string",
+             "n": 20, "missing": 0, "counts": {"=CMD()": 10, "ok": 10}},
+        ],
+    }
+    done = run(tmp_path, {"summary": custom})
+
+    assert done.returncode == 0, done.stderr
+    table = rows(tmp_path)
+    assert any(r["item"] == "values below 10 are shown as <10" for r in table)
+    assert any(r["item"] == "'=CMD()" for r in table)
