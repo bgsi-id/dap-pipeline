@@ -22,6 +22,7 @@ params.annotation_pack = 'grch38-v3'
 // 'samples': annotate only sites called in this run's samples (single-sample interpretation).
 params.annotation_scope = 'cohort'
 params.af_threshold = 0.01
+params.indexed_annotate_max_sites = 50000
 params.max_annotation_variants = null
 params.reference_dir = '/reference'
 params.fasta_name = 'GCA_000001405.15_GRCh38_no_alt_analysis_set.fna'
@@ -112,93 +113,84 @@ process PRECHECK_REFERENCES {
 }
 
 
-process PREPARE_SAMPLE_INPUT {
-    tag "${sample_id}"
-    container params.bcftools_image
-    cpus 1
-    memory '2 GB'
-    time '2h'
-
-    input:
-    tuple val(sample_id), path(input_vcf), path(input_index)
-
-    output:
-    tuple val(sample_id), path('input.vcf.gz'), path('input.vcf.gz.tbi'), path('checksums.json')
-
-    script:
-    """
-    set -euo pipefail
-    cp '${input_vcf}' input.vcf.gz
-    cp '${input_index}' input.vcf.gz.tbi
-    vcf_sha256=\$(sha256sum input.vcf.gz | awk '{print \$1}')
-    index_sha256=\$(sha256sum input.vcf.gz.tbi | awk '{print \$1}')
-    printf '{"vcf_sha256":"%s","index_sha256":"%s"}\\n' "\${vcf_sha256}" "\${index_sha256}" > checksums.json
-    """
-}
-
-
 process INGEST_SAMPLE {
     tag "${sample_id}"
     container params.variant_image
     cpus 4
     memory '12 GB'
     time '12h'
-    publishDir "${params.dap_output_uri}/ingestion", mode: 'copy', overwrite: true, failOnError: true
+    publishDir "${params.dap_output_uri}/ingestion",
+        mode: 'copy',
+        overwrite: true,
+        failOnError: true,
+        pattern: 'ingested/*',
+        saveAs: { name -> name.replaceFirst(/^ingested\//, '') }
 
     input:
-    tuple val(sample_id), path(input_vcf), val(vcf_sha256), path(input_index), val(index_sha256), val(run_id)
+    tuple val(sample_id), path(input_vcf), path(input_index)
 
     output:
-    tuple val(sample_id), val(run_id), val(vcf_sha256), path("${run_id}"), emit: parquet
+    path "${sample_id}.meta.tsv", emit: meta
+    path 'ingested/*', type: 'dir', emit: parquet_dir
 
     script:
     """
     set -euo pipefail
-    echo '${vcf_sha256}  ${input_vcf}' | sha256sum -c -
-    echo '${index_sha256}  ${input_index}' | sha256sum -c -
+    vcf_sha256=\$(sha256sum '${input_vcf}' | awk '{print \$1}')
+    run_id="${params.batch_id}-${sample_id}-\${vcf_sha256:0:16}"
+    printf '%s\\t%s\\t%s\\n' '${sample_id}' "\${run_id}" "\${vcf_sha256}" > '${sample_id}.meta.tsv'
+    mkdir -p "ingested/\${run_id}"
 
     python -m variant_ingest \
       --input '${input_vcf}' \
-      --output '${run_id}' \
+      --output "ingested/\${run_id}" \
       --release '${params.release_id}' \
       --batch '${params.batch_id}' \
       --assembly '${params.assembly}' \
       --sample-id '${sample_id}' \
       --allow-sample-id-mismatch \
-      --run-id '${run_id}' \
+      --run-id "\${run_id}" \
       --rows-per-file ${params.rows_per_file}
     """
 }
 
 
 process LOAD_VARIANTS {
-    tag "${sample_id}"
+    tag "${params.batch_id}"
     container params.variant_image
     cpus 1
     memory '2 GB'
-    time '2h'
+    time '6h'
     maxForks 1
     errorStrategy 'retry'
     maxRetries 3
 
     input:
-    tuple val(sample_id), val(run_id), val(vcf_sha256), path(parquet_tree)
+    path meta_files
+    path parquet_trees
 
     output:
-    tuple val(sample_id), path("${sample_id}.load.json"), emit: receipt
+    path 'load-receipts.jsonl', emit: receipt
 
     script:
     """
     set -euo pipefail
-    variant_etl_control.py load-variants \
-      --local-root '${parquet_tree}' \
-      --published-root '${params.dap_output_uri}/ingestion/${run_id}' \
-      --clickhouse-url '${params.clickhouse_url}' \
-      --database '${params.clickhouse_database}' \
-      --region '${params.aws_region}' \
-      --sample-id '${sample_id}' \
-      --source-sha256 '${vcf_sha256}' \
-      --output '${sample_id}.load.json'
+    tab=\$(printf '\\t')
+    : > load-receipts.jsonl
+    for meta in *.meta.tsv; do
+      IFS="\${tab}" read -r sample_id run_id vcf_sha256 < "\${meta}"
+      variant_etl_control.py load-variants \
+        --local-root "\${run_id}" \
+        --published-root "${params.dap_output_uri}/ingestion/\${run_id}" \
+        --clickhouse-url '${params.clickhouse_url}' \
+        --database '${params.clickhouse_database}' \
+        --region '${params.aws_region}' \
+        --sample-id "\${sample_id}" \
+        --source-sha256 "\${vcf_sha256}" \
+        --output "\${sample_id}.load.json"
+      cat "\${sample_id}.load.json" >> load-receipts.jsonl
+      printf '\\n' >> load-receipts.jsonl
+    done
     """
 }
 
@@ -262,208 +254,88 @@ process ANNOTATE_AF {
 }
 
 
-process NORMALIZE_AF_FIELDS {
+process ANNOTATE_BASE_AND_SELECT {
     tag "${params.annotation_pack}"
     container params.bcftools_image
-    cpus 2
-    memory '4 GB'
-    time '2h'
+    cpus 8
+    memory '16 GB'
+    time '12h'
 
     input:
     path raw_vcf
     path reference_ready
 
     output:
-    path 'site.gnomad.vcf.gz', emit: vcf
-
-    script:
-    """
-    set -euo pipefail
-    header="\$(bcftools view -h '${raw_vcf}')"
-    printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_af_max[>,]'
-    : > rename-annots.tsv
-    if ! printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_af_popmax[>,]'; then
-      printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_popmax_af[>,]' \
-        || { echo 'Echtvar output lacks gnomAD AF popmax field' >&2; exit 1; }
-      printf 'INFO/gnomad_popmax_af INFO/gnomad_af_popmax\n' >> rename-annots.tsv
-    fi
-    if ! printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_nhomalt[>,]'; then
-      if printf '%s\n' "\${header}" | grep -q '##INFO=<ID=gnomad_nhomalts[>,]'; then
-        printf 'INFO/gnomad_nhomalts INFO/gnomad_nhomalt\n' >> rename-annots.tsv
-      fi
-    fi
-    if [ -s rename-annots.tsv ]; then
-      bcftools annotate --rename-annots rename-annots.tsv -Oz \
-        -o site.gnomad.vcf.gz '${raw_vcf}'
-    else
-      cp '${raw_vcf}' site.gnomad.vcf.gz
-    fi
-    normalized_header="\$(bcftools view -h site.gnomad.vcf.gz)"
-    printf '%s\n' "\${normalized_header}" | grep -q '##INFO=<ID=gnomad_af_popmax[>,]'
-    """
-}
-
-
-process ANNOTATE_CLINVAR {
-    tag "${params.annotation_pack}"
-    container params.bcftools_image
-    cpus 8
-    memory '12 GB'
-    time '4h'
-
-    input:
-    path frequency_vcf
-    path reference_ready
-
-    output:
-    path 'site.clinvar.vcf.gz', emit: vcf
-    path 'site.clinvar.vcf.gz.tbi', emit: index
-
-    script:
-    """
-    set -euo pipefail
-    bcftools index -t --threads ${task.cpus} '${frequency_vcf}'
-    # With no sites to annotate, restrict the scan to the (empty) site list. bcftools annotate -a
-    # otherwise reads the whole ClinVar file whatever the input holds. The output, including its
-    # header, is the same; non-empty inputs run exactly as before.
-    region_args=""
-    if [ -z "\$(bcftools view -H '${frequency_vcf}' | head -n 1 || true)" ]; then
-      echo 'No sites to annotate: not reading the ClinVar file' >&2
-      region_args="-R ${frequency_vcf}"
-    fi
-    bcftools annotate \$region_args \
-      -a '${params.reference_dir}/${params.clinvar_name}' \
-      -c INFO/CLNSIG,INFO/CLNSIGCONF,INFO/CLNREVSTAT,INFO/CLNDN,INFO/CLNVI \
-      --pair-logic exact \
-      --threads ${task.cpus} \
-      -Oz -o site.clinvar.vcf.gz \
-      '${frequency_vcf}'
-    bcftools index -t --threads ${task.cpus} site.clinvar.vcf.gz
-    """
-}
-
-
-process ANNOTATE_SPLICEAI {
-    tag "${params.annotation_pack}"
-    container params.bcftools_image
-    cpus 8
-    memory '12 GB'
-    time '4h'
-
-    input:
-    path clinvar_vcf
-    path clinvar_index
-    path reference_ready
-
-    output:
-    path 'site.spliceai.vcf.gz', emit: vcf
-    path 'site.spliceai.vcf.gz.tbi', emit: index
-
-    script:
-    """
-    set -euo pipefail
-    # With no sites to annotate, restrict the scan to the (empty) site list. bcftools annotate -a
-    # otherwise reads the whole SpliceAI file whatever the input holds (about 20 minutes on staging
-    # with zero sites). The output, including its header, is the same; non-empty inputs run as before.
-    region_args=""
-    if [ -z "\$(bcftools view -H '${clinvar_vcf}' | head -n 1 || true)" ]; then
-      echo 'No sites to annotate: not reading the SpliceAI file' >&2
-      region_args="-R ${clinvar_vcf}"
-    fi
-    bcftools annotate \$region_args \
-      -a '${params.reference_dir}/${params.spliceai_name}' \
-      -c INFO/SpliceAI \
-      --pair-logic exact \
-      --threads ${task.cpus} \
-      -Oz -o site.spliceai.vcf.gz \
-      '${clinvar_vcf}'
-    bcftools index -t --threads ${task.cpus} site.spliceai.vcf.gz
-    """
-}
-
-
-process ANNOTATE_LOCAL_CSQ {
-    tag "${params.annotation_pack}"
-    container params.bcftools_image
-    cpus 8
-    memory '16 GB'
-    time '8h'
-
-    input:
-    path annotated_vcf
-    path annotated_index
-    path reference_ready
-
-    output:
-    path 'site.base.vcf.gz', emit: vcf
-    path 'site.base.vcf.gz.tbi', emit: index
-
-    script:
-    """
-    set -euo pipefail
-    bcftools csq \
-      --local-csq \
-      --fasta-ref '${params.reference_dir}/${params.fasta_name}' \
-      --gff-annot '${params.reference_dir}/${params.gff_name}' \
-      --threads ${task.cpus} \
-      -Oz -o site.base.vcf.gz \
-      '${annotated_vcf}'
-    bcftools index -t --threads ${task.cpus} site.base.vcf.gz
-    """
-}
-
-
-process ADD_RESCUE_FIELDS {
-    tag "${params.annotation_pack}"
-    container params.bcftools_image
-    cpus 4
-    memory '4 GB'
-    time '2h'
-
-    input:
-    path base_vcf
-    path base_index
-
-    output:
-    path 'site.rescue.vcf.gz', emit: vcf
-    path 'site.rescue.vcf.gz.tbi', emit: index
-
-    script:
-    """
-    set -euo pipefail
-    bcftools view -Ov '${base_vcf}' \
-      | perl '${projectDir}/bin/add_rescue_fields.pl' \
-      | bcftools view -Oz --threads ${task.cpus} -o site.rescue.vcf.gz
-    bcftools index -t --threads ${task.cpus} site.rescue.vcf.gz
-    """
-}
-
-
-process SELECT_DETAIL_SITES {
-    tag "AF<${params.af_threshold}"
-    container params.bcftools_image
-    cpus 4
-    memory '8 GB'
-    time '4h'
-
-    input:
-    path base_vcf
-    path base_index
-
-    output:
-    path 'site.small.vcf.gz', emit: vcf
-    path 'site.small.vcf.gz.tbi', emit: index
+    path 'site.base.vcf.gz', emit: base_vcf
+    path 'site.base.vcf.gz.tbi', emit: base_index
+    path 'site.small.vcf.gz', emit: small_vcf
+    path 'site.small.vcf.gz.tbi', emit: small_index
     path 'selection.tsv', emit: metrics
 
     script:
     """
     set -euo pipefail
-    total=\$(bcftools index -n '${base_vcf}')
-    bcftools view \
-      --include '((INFO/gnomad_af_max="." || INFO/gnomad_af_max=-1 || INFO/gnomad_af_max<${params.af_threshold}) && (INFO/gnomad_af_popmax="." || INFO/gnomad_af_popmax=-1 || INFO/gnomad_af_popmax<${params.af_threshold})) || INFO/DAP_CLINVAR_RESCUE=1 || INFO/DAP_SPLICEAI_DS_MAX>=0.5' \
+    tmp_dir=\$(mktemp -d)
+    trap 'rm -rf "\${tmp_dir}"' EXIT
+
+    header="\$(bcftools view -h '${raw_vcf}')"
+    printf '%s\\n' "\${header}" | grep -q '##INFO=<ID=gnomad_af_max[>,]'
+    : > "\${tmp_dir}/rename-annots.tsv"
+    if ! printf '%s\\n' "\${header}" | grep -q '##INFO=<ID=gnomad_af_popmax[>,]'; then
+      printf '%s\\n' "\${header}" | grep -q '##INFO=<ID=gnomad_popmax_af[>,]' \
+        || { echo 'Echtvar output lacks gnomAD AF popmax field' >&2; exit 1; }
+      printf 'INFO/gnomad_popmax_af INFO/gnomad_af_popmax\\n' >> "\${tmp_dir}/rename-annots.tsv"
+    fi
+    if ! printf '%s\\n' "\${header}" | grep -q '##INFO=<ID=gnomad_nhomalt[>,]'; then
+      if printf '%s\\n' "\${header}" | grep -q '##INFO=<ID=gnomad_nhomalts[>,]'; then
+        printf 'INFO/gnomad_nhomalts INFO/gnomad_nhomalt\\n' >> "\${tmp_dir}/rename-annots.tsv"
+      fi
+    fi
+    if [ -s "\${tmp_dir}/rename-annots.tsv" ]; then
+      bcftools annotate --rename-annots "\${tmp_dir}/rename-annots.tsv" \
+        --threads ${task.cpus} -Oz -o "\${tmp_dir}/norm.vcf.gz" '${raw_vcf}'
+    else
+      cp '${raw_vcf}' "\${tmp_dir}/norm.vcf.gz"
+    fi
+    normalized_header="\$(bcftools view -h "\${tmp_dir}/norm.vcf.gz")"
+    printf '%s\\n' "\${normalized_header}" | grep -q '##INFO=<ID=gnomad_af_popmax[>,]'
+    bcftools index -t --threads ${task.cpus} "\${tmp_dir}/norm.vcf.gz"
+
+    total=\$(bcftools index -n "\${tmp_dir}/norm.vcf.gz")
+    region_args=""
+    if [ "\${total}" -le ${params.indexed_annotate_max_sites} ]; then
+      echo "Using indexed -R lookup for \${total} sites (threshold=${params.indexed_annotate_max_sites})" >&2
+      region_args="-R \${tmp_dir}/norm.vcf.gz"
+    fi
+
+    bcftools annotate \${region_args} \
+      -a '${params.reference_dir}/${params.clinvar_name}' \
+      -c INFO/CLNSIG,INFO/CLNSIGCONF,INFO/CLNREVSTAT,INFO/CLNDN,INFO/CLNVI \
+      --pair-logic exact \
       --threads ${task.cpus} \
-      -Oz -o site.small.vcf.gz \
-      '${base_vcf}'
+      -Oz -o "\${tmp_dir}/clinvar.vcf.gz" \
+      "\${tmp_dir}/norm.vcf.gz"
+    bcftools index -t --threads ${task.cpus} "\${tmp_dir}/clinvar.vcf.gz"
+
+    bcftools annotate \${region_args} \
+      -a '${params.reference_dir}/${params.spliceai_name}' \
+      -c INFO/SpliceAI \
+      --pair-logic exact \
+      -Ou "\${tmp_dir}/clinvar.vcf.gz" \
+    | bcftools csq \
+      --local-csq \
+      --fasta-ref '${params.reference_dir}/${params.fasta_name}' \
+      --gff-annot '${params.reference_dir}/${params.gff_name}' \
+      --threads ${task.cpus} \
+      -Oz -o site.base.vcf.gz
+    bcftools index -t --threads ${task.cpus} site.base.vcf.gz
+
+    bcftools view -Ov site.base.vcf.gz \
+      | perl '${projectDir}/bin/add_rescue_fields.pl' \
+      | bcftools view \
+        --include '((INFO/gnomad_af_max="." || INFO/gnomad_af_max=-1 || INFO/gnomad_af_max<${params.af_threshold}) && (INFO/gnomad_af_popmax="." || INFO/gnomad_af_popmax=-1 || INFO/gnomad_af_popmax<${params.af_threshold})) || INFO/DAP_CLINVAR_RESCUE=1 || INFO/DAP_SPLICEAI_DS_MAX>=0.5' \
+        --threads ${task.cpus} \
+        -Oz -o site.small.vcf.gz
     bcftools index -t --threads ${task.cpus} site.small.vcf.gz
     selected=\$(bcftools index -n site.small.vcf.gz)
     printf 'total_sites\\t%s\\nselected_sites\\t%s\\naf_threshold\\t%s\\n' \
@@ -482,83 +354,44 @@ process ANNOTATE_DETAIL_VEP {
     maxRetries 2
 
     input:
-    path selected_vcf
-    path selected_index
-    path selection_metrics
+    tuple path(selected_vcf), path(selected_index), path(selection_metrics)
     path reference_ready
 
     output:
-    path 'site.detail.vcf.gz', emit: vcf
+    tuple path('site.detail.vcf.gz'), path('site.detail.vcf.gz.tbi'), emit: detail
 
     script:
     """
     set -euo pipefail
-    selected_count=\$(sed -n 's/^selected_sites[[:space:]]*//p' '${selection_metrics}')
-    test -n "\${selected_count}"
-    if [ "\${selected_count}" -eq 0 ]; then
-      cp '${selected_vcf}' site.detail.vcf.gz
-    else
-      plugin_dir=""
-      for candidate in "${projectDir}/bin" "\${VEP_DIR_PLUGINS:-/plugins}" /plugins /opt/vep/.vep/Plugins "${params.reference_dir}"; do
-        if [ -f "\${candidate}/REVEL.pm" ]; then
-          plugin_dir="\${candidate}"
-          break
-        fi
-      done
-      if [ -z "\${plugin_dir}" ]; then
-        echo "REVEL.pm plugin not found in candidate paths" >&2
-        exit 1
+    plugin_dir=""
+    for candidate in "${projectDir}/bin" "\${VEP_DIR_PLUGINS:-/plugins}" /plugins /opt/vep/.vep/Plugins "${params.reference_dir}"; do
+      if [ -f "\${candidate}/REVEL.pm" ]; then
+        plugin_dir="\${candidate}"
+        break
       fi
-      vep \
-        --input_file '${selected_vcf}' \
-        --output_file site.detail.vcf.gz \
-        --vcf --compress_output bgzip --offline --cache \
-        --dir_cache '${params.vep_cache_dir}' \
-        --merged --cache_version '${params.vep_cache_version}' \
-        --assembly '${params.assembly}' \
-        --fasta '${params.reference_dir}/${params.fasta_name}' \
-        --mane --canonical --symbol --biotype --hgvs --hgvsg \
-        --allele_number --sift b --polyphen b \
-        --shift_hgvs 1 --numbers --domains --protein --uniprot \
-        --flag_pick --pick_order mane_select,mane_plus_clinical,canonical,rank \
-        --dir_plugins "\${plugin_dir}" \
-        --plugin REVEL,file='${params.reference_dir}/${params.revel_name}' \
-        --fork ${task.cpus} --buffer_size ${params.vep_buffer_size} \
-        --no_stats --force_overwrite
+    done
+    if [ -z "\${plugin_dir}" ]; then
+      echo "REVEL.pm plugin not found in candidate paths" >&2
+      exit 1
     fi
-    """
-}
-
-
-process INDEX_DETAIL_VCF {
-    tag "${params.annotation_pack}"
-    container params.bcftools_image
-    cpus 4
-    memory '4 GB'
-    time '2h'
-    errorStrategy 'retry'
-    maxRetries 2
-
-    input:
-    path vep_vcf, name: 'vep-output.vcf.gz'
-    path selection_metrics
-
-    output:
-    path 'site.detail.vcf.gz', emit: vcf
-    path 'site.detail.vcf.gz.tbi', emit: index
-
-    script:
-    """
-    set -euo pipefail
-    cp vep-output.vcf.gz site.detail.vcf.gz
-    selected_count=\$(sed -n 's/^selected_sites[[:space:]]*//p' '${selection_metrics}')
-    test -n "\${selected_count}"
-    if [ "\${selected_count}" -gt 0 ]; then
-      bcftools view -h site.detail.vcf.gz \
-        | grep '##INFO=<ID=CSQ' \
-        | grep -qi 'REVEL'
-    fi
-    bcftools index -t --threads ${task.cpus} site.detail.vcf.gz
+    vep \
+      --input_file '${selected_vcf}' \
+      --output_file site.detail.vcf.gz \
+      --vcf --compress_output bgzip --offline --cache \
+      --dir_cache '${params.vep_cache_dir}' \
+      --merged --cache_version '${params.vep_cache_version}' \
+      --assembly '${params.assembly}' \
+      --fasta '${params.reference_dir}/${params.fasta_name}' \
+      --mane --canonical --symbol --biotype --hgvs --hgvsg \
+      --allele_number --sift b --polyphen b \
+      --shift_hgvs 1 --numbers --domains --protein --uniprot \
+      --flag_pick --pick_order mane_select,mane_plus_clinical,canonical,rank \
+      --dir_plugins "\${plugin_dir}" \
+      --plugin REVEL,file='${params.reference_dir}/${params.revel_name}' \
+      --fork ${task.cpus} --buffer_size ${params.vep_buffer_size} \
+      --no_stats --force_overwrite
+    { zcat site.detail.vcf.gz || true; } | grep -m 1 '^##INFO=<ID=CSQ' | grep -qi 'REVEL'
+    tabix -p vcf site.detail.vcf.gz
     """
 }
 
@@ -571,56 +404,36 @@ process LOAD_ANNOTATIONS {
     time '4h'
     errorStrategy 'retry'
     maxRetries 2
+    publishDir params.dap_output_uri, mode: 'copy', overwrite: true, failOnError: true
 
     input:
-    path base_vcf
-    path detail_vcf
+    path 'site.base.vcf.gz'
+    path 'site.base.vcf.gz.tbi'
+    tuple path('site.detail.vcf.gz'), path('site.detail.vcf.gz.tbi')
+    path selection_metrics
+    path site_export_metrics
 
     output:
     path 'annotation-load.json', emit: receipt
+    path 'results', emit: published
 
     script:
     """
     set -euo pipefail
     variant_etl_control.py load-annotations \
-      --base-vcf '${base_vcf}' \
-      --detail-vcf '${detail_vcf}' \
+      --base-vcf site.base.vcf.gz \
+      --detail-vcf site.detail.vcf.gz \
       --annotation-pack '${params.annotation_pack}' \
       --assembly '${params.assembly}' \
       --clickhouse-url '${params.clickhouse_url}' \
       --database '${params.clickhouse_database}' \
       --completion-table '${params.annotation_completion_table}' \
       --output annotation-load.json
-    """
-}
 
-
-process COLLECT_RESULTS {
-    tag "${params.batch_id}"
-    container params.variant_image
-    cpus 1
-    memory '2 GB'
-    publishDir params.dap_output_uri, mode: 'copy', overwrite: true, failOnError: true
-
-    input:
-    path site_base_vcf
-    path site_base_index
-    path site_detail_vcf
-    path site_detail_index
-    path selection_metrics
-    path annotation_receipt
-    path site_export_metrics
-
-    output:
-    path 'results'
-
-    script:
-    """
-    set -euo pipefail
     mkdir -p results/annotation
-    cp '${site_base_vcf}' '${site_base_index}' results/annotation/
-    cp '${site_detail_vcf}' '${site_detail_index}' results/annotation/
-    cp '${selection_metrics}' '${annotation_receipt}' '${site_export_metrics}' results/annotation/
+    cp site.base.vcf.gz site.base.vcf.gz.tbi results/annotation/
+    cp site.detail.vcf.gz site.detail.vcf.gz.tbi results/annotation/
+    cp '${selection_metrics}' annotation-load.json '${site_export_metrics}' results/annotation/
     python - <<'PY'
 import json, pathlib
 out = pathlib.Path('results/run.json')
@@ -673,37 +486,32 @@ workflow {
         }
         tuple(sampleId, file(vcfUri, checkIfExists: true), file(indexUri, checkIfExists: true))
     }
-    prepared_inputs = PREPARE_SAMPLE_INPUT(sample_inputs).map { sampleId, vcf, index, checksumFile ->
-        def checksums = new groovy.json.JsonSlurper().parse(checksumFile.toFile())
-        def sha = checksums.vcf_sha256?.toString()?.toLowerCase()
-        def indexSha = checksums.index_sha256?.toString()?.toLowerCase()
-        if (!(sha ==~ /[0-9a-f]{64}/) || !(indexSha ==~ /[0-9a-f]{64}/)) {
-            error "Sample ${sampleId} checksum preparation failed"
-        }
-        def runId = safe_component("${params.batch_id}-${sampleId}-${sha.take(16)}", 'run_id')
-        tuple(sampleId, vcf, sha, index, indexSha, runId)
-    }
-
     references = PRECHECK_REFERENCES()
-    ingested = INGEST_SAMPLE(prepared_inputs)
-    loaded = LOAD_VARIANTS(ingested.parquet)
-    load_barrier = loaded.receipt.collect()
+    ingested = INGEST_SAMPLE(sample_inputs)
+    loaded = LOAD_VARIANTS(ingested.meta.collect(), ingested.parquet_dir.collect())
     def scopeIds = (
         sampleIds.collect { safe_component(it, 'sample_id') } +
         records.collect { it.sample_alias }.findAll { it && (it ==~ /[A-Za-z0-9._-]{1,128}/) }
     ).unique()
     scope_sample_ids = params.annotation_scope == 'samples' ? scopeIds.join(',') : ''
-    sites = EXPORT_NOVEL_SITES(load_barrier, references, scope_sample_ids)
+    sites = EXPORT_NOVEL_SITES(loaded.receipt, references, scope_sample_ids)
     af_raw = ANNOTATE_AF(sites.vcf, references)
-    af = NORMALIZE_AF_FIELDS(af_raw.vcf, references)
-    clinvar = ANNOTATE_CLINVAR(af.vcf, references)
-    spliceai = ANNOTATE_SPLICEAI(clinvar.vcf, clinvar.index, references)
-    base = ANNOTATE_LOCAL_CSQ(spliceai.vcf, spliceai.index, references)
-    rescue = ADD_RESCUE_FIELDS(base.vcf, base.index)
-    selected = SELECT_DETAIL_SITES(rescue.vcf, rescue.index)
-    vep = ANNOTATE_DETAIL_VEP(selected.vcf, selected.index, selected.metrics, references)
-    detail = INDEX_DETAIL_VCF(vep.vcf, selected.metrics)
-    annotation_load = LOAD_ANNOTATIONS(base.vcf, detail.vcf)
-    COLLECT_RESULTS(base.vcf, base.index, detail.vcf, detail.index,
-                    selected.metrics, annotation_load.receipt, sites.metrics)
+    base = ANNOTATE_BASE_AND_SELECT(af_raw.vcf, references)
+    detail_branch = base.small_vcf
+        .combine(base.small_index)
+        .combine(base.metrics)
+        .branch { vcf, idx, metrics ->
+            def selectedCount = metrics.readLines().findResult { line ->
+                def parts = line.split('\t')
+                parts.length >= 2 && parts[0] == 'selected_sites' ? parts[1].trim().toLong() : null
+            }
+            if (selectedCount == null) error 'selection.tsv missing selected_sites'
+            run_vep: selectedCount > 0
+                return tuple(vcf, idx, metrics)
+            skip_vep: true
+                return tuple(vcf, idx)
+        }
+    vep = ANNOTATE_DETAIL_VEP(detail_branch.run_vep, references)
+    detail_out = vep.detail.mix(detail_branch.skip_vep)
+    LOAD_ANNOTATIONS(base.base_vcf, base.base_index, detail_out, base.metrics, sites.metrics)
 }

@@ -56,10 +56,11 @@ def test_rescue_headers_are_declared_once():
 
 def test_pipeline_uses_normalized_rescue_fields_and_handles_empty_detail_set():
     source = PIPELINE.read_text()
-    assert "process NORMALIZE_AF_FIELDS" in source
+    assert "process ANNOTATE_BASE_AND_SELECT" in source
     assert "INFO/gnomad_nhomalts INFO/gnomad_nhomalt" in source
     assert "INFO/DAP_CLINVAR_RESCUE=1" in source
     assert "INFO/DAP_SPLICEAI_DS_MAX>=0.5" in source
     assert "INFO/SpliceAI ~" not in source
-    assert "detail = INDEX_DETAIL_VCF(vep.vcf, selected.metrics)" in source
-    assert 'if [ "\\${selected_count}" -gt 0 ]; then' in source
+    assert "run_vep: selectedCount > 0" in source
+    assert "skip_vep: true" in source
+    assert "tabix -p vcf site.detail.vcf.gz" in source
