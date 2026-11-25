@@ -54,14 +54,16 @@ def sample_from_asset(def sample) {
     def assets = (sample.assets ?: []).collectEntries { asset ->
         [(asset.role?.toString()?.toLowerCase()): asset]
     }
-    if (!sample.id || !assets.vcf || !assets.vcf_index) {
-        error 'Each resolved sample requires id, vcf and vcf_index assets'
+    if (!sample.id) {
+        error 'Each resolved sample requires an id'
     }
+    // A missing vcf or vcf_index asset is not fatal here: the workflow skips
+    // that sample and reports it (see skipped_samples.tsv).
     return [
         sample_id: sample.id.toString(),
         sample_alias: (sample.source_alias ?: sample.display_name ?: sample.name ?: '')?.toString()?.trim(),
-        vcf_uri: assets.vcf.access_uri.toString(),
-        index_uri: assets.vcf_index.access_uri.toString(),
+        vcf_uri: assets.vcf?.access_uri?.toString(),
+        index_uri: assets.vcf_index?.access_uri?.toString(),
     ]
 }
 
@@ -617,6 +619,7 @@ process COLLECT_RESULTS {
     path selection_metrics
     path annotation_receipt
     path site_export_metrics
+    val skipped_tsv
 
     output:
     path 'results'
@@ -628,6 +631,9 @@ process COLLECT_RESULTS {
     cp '${site_base_vcf}' '${site_base_index}' results/annotation/
     cp '${site_detail_vcf}' '${site_detail_index}' results/annotation/
     cp '${selection_metrics}' '${annotation_receipt}' '${site_export_metrics}' results/annotation/
+    cat > results/skipped_samples.tsv <<'SKIPPED_TSV'
+${skipped_tsv}
+SKIPPED_TSV
     python - <<'PY'
 import json, pathlib
 out = pathlib.Path('results/run.json')
@@ -638,6 +644,7 @@ out.write_text(json.dumps({
     'assembly': '${params.assembly}',
     'annotation_pack': '${params.annotation_pack}',
     'af_threshold': ${params.af_threshold},
+    'skipped_samples': max(len(pathlib.Path('results/skipped_samples.tsv').read_text().splitlines()) - 1, 0),
 }, indent=2, sort_keys=True))
 PY
     """
@@ -671,14 +678,42 @@ workflow {
         error 'Input sample IDs must be present and unique'
     }
 
-    sample_inputs = Channel.fromList(records).map { record ->
+    // One sample with a missing VCF or index must not stop the whole run. Skip
+    // it, say so in the run log, and list it in results/skipped_samples.tsv so
+    // the user can fix the source files and run it again.
+    def usable = []
+    def skipped = []
+    records.each { record ->
         def sampleId = safe_component(record.sample_id ?: record.id, 'sample_id')
         def vcfUri = record.vcf_uri?.toString()
         def indexUri = record.index_uri?.toString()
-        if (!vcfUri || !indexUri) {
-            error "Sample ${sampleId} requires VCF and VCF index URIs"
+        def reason = null
+        if (!vcfUri) reason = 'no VCF listed for this sample'
+        else if (!indexUri) reason = 'no VCF index (.tbi) listed for this sample'
+        else if (!file(vcfUri).exists()) reason = 'VCF file not found'
+        else if (!file(indexUri).exists()) reason = 'VCF index (.tbi) file not found'
+        if (reason) {
+            skipped << [sample_id: sampleId, reason: reason, vcf_uri: vcfUri ?: '', index_uri: indexUri ?: '']
+            log.warn "SKIPPED sample ${sampleId}: ${reason}. VCF=${vcfUri ?: '-'} INDEX=${indexUri ?: '-'}. Fix the source files and run this sample again."
+        } else {
+            usable << record
         }
-        tuple(sampleId, file(vcfUri, checkIfExists: true), file(indexUri, checkIfExists: true))
+    }
+    if (!usable) {
+        error "None of the ${records.size()} input samples could be used: " +
+            skipped.collect { "${it.sample_id} (${it.reason})" }.join('; ')
+    }
+    if (skipped) {
+        log.warn "Continuing with ${usable.size()} of ${records.size()} samples; ${skipped.size()} skipped (see results/skipped_samples.tsv)."
+    }
+    def skipped_tsv = (
+        ['sample_id\treason\tvcf_uri\tindex_uri'] +
+        skipped.collect { [it.sample_id, it.reason, it.vcf_uri, it.index_uri].join('\t') }
+    ).join('\n')
+
+    sample_inputs = Channel.fromList(usable).map { record ->
+        def sampleId = safe_component(record.sample_id ?: record.id, 'sample_id')
+        tuple(sampleId, file(record.vcf_uri, checkIfExists: true), file(record.index_uri, checkIfExists: true))
     }
     prepared_inputs = PREPARE_SAMPLE_INPUT(sample_inputs).map { sampleId, vcf, index, checksumFile ->
         def checksums = new groovy.json.JsonSlurper().parse(checksumFile.toFile())
@@ -696,8 +731,8 @@ workflow {
     loaded = LOAD_VARIANTS(ingested.parquet)
     load_barrier = loaded.receipt.collect()
     def scopeIds = (
-        sampleIds.collect { safe_component(it, 'sample_id') } +
-        records.collect { it.sample_alias }.findAll { it && (it ==~ /[A-Za-z0-9._-]{1,128}/) }
+        usable.collect { safe_component(it.sample_id ?: it.id, 'sample_id') } +
+        usable.collect { it.sample_alias }.findAll { it && (it ==~ /[A-Za-z0-9._-]{1,128}/) }
     ).unique()
     scope_sample_ids = params.annotation_scope == 'samples' ? scopeIds.join(',') : ''
     sites = EXPORT_NOVEL_SITES(load_barrier, references, scope_sample_ids)
@@ -712,5 +747,5 @@ workflow {
     detail = INDEX_DETAIL_VCF(vep.vcf, selected.metrics)
     annotation_load = LOAD_ANNOTATIONS(base.vcf, detail.vcf)
     COLLECT_RESULTS(base.vcf, base.index, detail.vcf, detail.index,
-                    selected.metrics, annotation_load.receipt, sites.metrics)
+                    selected.metrics, annotation_load.receipt, sites.metrics, skipped_tsv)
 }
