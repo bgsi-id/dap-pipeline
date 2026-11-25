@@ -480,6 +480,13 @@ process ANNOTATE_DETAIL_VEP {
     time '18h'
     errorStrategy 'retry'
     maxRetries 2
+    // VEP over millions of sites runs longer than a spot node tends to live
+    // (exit 143 after ~30 min, then it restarts from zero), so keep this one
+    // step on on-demand. Other steps stay on the platform default (spot).
+    // Both keys are set because the platform default also pins the spot pool
+    // label; if the two selectors merge instead of replace, the pod would be
+    // unschedulable with only the capacity type changed.
+    pod nodeSelector: 'karpenter.sh/capacity-type=on-demand,dap.bgsi.go.id/runtime-pool=cpu-amd64-ondemand'
 
     input:
     path selected_vcf
