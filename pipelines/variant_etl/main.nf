@@ -39,6 +39,12 @@ params.aws_region = 'ap-southeast-3'
 params.clickhouse_url = 'http://dap-ch:8123'
 params.clickhouse_database = 'default'
 params.annotation_completion_table = 'variant_annotation_complete'
+// Long annotation steps run on on-demand nodes: a spot node tends to be reclaimed
+// after ~30 min, which kills the task and restarts it from zero. Both keys are
+// set because the platform default also pins the spot pool label; if the two
+// selectors merge instead of replace, setting only the capacity type would make
+// the pod unschedulable.
+params.on_demand_node_selector = 'karpenter.sh/capacity-type=on-demand,dap.bgsi.go.id/runtime-pool=cpu-amd64-ondemand'
 
 
 def safe_component(def value, String label) {
@@ -313,6 +319,8 @@ process ANNOTATE_CLINVAR {
     memory '12 GB'
     time '4h'
 
+    pod nodeSelector: params.on_demand_node_selector
+
     input:
     path frequency_vcf
     path reference_ready
@@ -352,6 +360,8 @@ process ANNOTATE_SPLICEAI {
     memory '12 GB'
     time '4h'
 
+    pod nodeSelector: params.on_demand_node_selector
+
     input:
     path clinvar_vcf
     path clinvar_index
@@ -390,6 +400,8 @@ process ANNOTATE_LOCAL_CSQ {
     cpus 8
     memory '16 GB'
     time '8h'
+
+    pod nodeSelector: params.on_demand_node_selector
 
     input:
     path annotated_vcf
@@ -482,13 +494,8 @@ process ANNOTATE_DETAIL_VEP {
     time '18h'
     errorStrategy 'retry'
     maxRetries 2
-    // VEP over millions of sites runs longer than a spot node tends to live
-    // (exit 143 after ~30 min, then it restarts from zero), so keep this one
-    // step on on-demand. Other steps stay on the platform default (spot).
-    // Both keys are set because the platform default also pins the spot pool
-    // label; if the two selectors merge instead of replace, the pod would be
-    // unschedulable with only the capacity type changed.
-    pod nodeSelector: 'karpenter.sh/capacity-type=on-demand,dap.bgsi.go.id/runtime-pool=cpu-amd64-ondemand'
+    // VEP over millions of sites outlives a spot node (exit 143 after ~30 min).
+    pod nodeSelector: params.on_demand_node_selector
 
     input:
     path selected_vcf
